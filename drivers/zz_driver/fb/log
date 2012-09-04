@@ -1,0 +1,27 @@
+make -C /home/mazhiming/linux-2.6.24  M=/home/mazhiming/000/driver/fbdev/fbnew modules
+make[1]: Entering directory `/home/mazhiming/linux-2.6.24'
+  CC [M]  /home/mazhiming/000/driver/fbdev/fbnew/T11_fb.o
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'ili9320_vma_nopage':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:140: warning: label 'out' defined but not used
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: At top level:
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:325: warning: function declaration isn't a prototype
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'Point':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:459: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:467: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:468: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'Flash_Frame':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:503: error: expected ';' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'GetMemColor':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:573: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:574: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'FlushRect':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:584: warning: unused variable 'irq_state'
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: In function 'flush_DCache':
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:650: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:651: error: expected ')' before '!' token
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c: At top level:
+/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.c:778: warning: function declaration isn't a prototype
+make[2]: *** [/home/mazhiming/000/driver/fbdev/fbnew/T11_fb.o] Error 1
+make[1]: *** [_module_/home/mazhiming/000/driver/fbdev/fbnew] Error 2
+make[1]: Leaving directory `/home/mazhiming/linux-2.6.24'
+make: *** [modules] Error 2

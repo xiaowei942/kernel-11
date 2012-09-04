@@ -1,0 +1,232 @@
+//*----------------------------------------------------------------------------
+//*         ATMEL Microcontroller Software Support  -  ROUSSET  -
+//*----------------------------------------------------------------------------
+//* The software is delivered "AS IS" without warranty or condition of any
+//* kind, either express, implied or statutory. This includes without
+//* limitation any warranty or condition with respect to merchantability or
+//* fitness for any particular purpose, or against the infringements of
+//* intellectual property rights of others.
+//*----------------------------------------------------------------------------
+//* File Name           : main.c
+//* Object              : main application written in C
+//* Creation            : GGi
+//*----------------------------------------------------------------------------
+
+
+#include "adc_spi.h"
+
+
+static int kbuf;
+volatile unsigned int *paddr ;
+volatile unsigned int addr;
+
+int spi_config(void);
+
+/*----------------------------------------------------------------------*/
+int spi_config()
+{
+	int tmp;
+	printk("spi_config.... \n");
+	//PMC config   
+	paddr = ioremap(AT91A_PMC_PCER, 4);
+	*paddr |= ((0x1<<2)|(0x1<<3)|(0x1<<12));
+#if 0	
+	AT91F_PMC_EnablePeriphClock(AT91C_BASE_PMC, ((unsigned int) 1 << (12)));//spi
+	AT91F_PMC_EnablePeriphClock(AT91C_BASE_PMC, ((unsigned int) 1 << (2)));//pioA
+	AT91F_PMC_EnablePeriphClock(AT91C_BASE_PMC, ((unsigned int) 1 << (3)));//PIOB
+
+#endif
+	
+	//PIO config
+	
+	paddr = ioremap(0xfffff400, 0xA8);
+
+	*paddr |=AT91C_PA27_SPI0_NPCS1;
+	*(paddr+(0x10>>2)) |= AT91C_PA27_SPI0_NPCS1;//(1 << 27);
+	*(paddr+(0x60>>2)) |= ~(0xfffffffe);
+	*(paddr+(0x64>>2)) |= (0xfffffffe);
+		
+#if 0
+	AT91F_PIO_CfgOutput(AT91C_BASE_PIOB,AT91C_PA27_SPI0_NPCS1);
+
+	AT91F_PIO_CfgPullup(AT91C_BASE_PIOB,0xfffffffe);
+#endif
+	tmp = 0 ;
+	for(tmp=0;tmp<200000;tmp++);
+	
+//	
+
+	*(paddr+(0x74>>2)) = AT91C_PA27_SPI0_NPCS1;
+	*(paddr+(0x70>>2)) = ((AT91C_PA0_SPI0_MISO )|(AT91C_PA2_SPI0_SPCK  )|(AT91C_PA1_SPI0_MOSI));
+	*(paddr+1) = ((AT91C_PA0_SPI0_MISO )|(AT91C_PA2_SPI0_SPCK  )|(AT91C_PA1_SPI0_MOSI)| AT91C_PA27_SPI0_NPCS1);
+	
+	*(paddr+(0x60>>2)) |= ~((AT91C_PA0_SPI0_MISO )|(AT91C_PA2_SPI0_SPCK  )|(AT91C_PA1_SPI0_MOSI)| AT91C_PA27_SPI0_NPCS1);
+	*(paddr+(0x64>>2)) |= ((AT91C_PA0_SPI0_MISO )|(AT91C_PA2_SPI0_SPCK  )|(AT91C_PA1_SPI0_MOSI)| AT91C_PA27_SPI0_NPCS1);
+
+#if 0
+	AT91F_PIO_CfgPeriph(AT91C_BASE_PIOA,((unsigned int) AT91C_PA0_SPI0_MISO ) |((unsigned int)AT91C_PA2_SPI0_SPCK  )|AT91C_PA1_SPI0_MOSI  ,((unsigned int) AT91C_PA27_SPI0_NPCS1 ));
+		
+		
+	AT91F_PIO_CfgPullup(AT91C_BASE_PIOA,(AT91C_PA2_SPI0_SPCK | AT91C_PA4_SPI0_NPCS1 | AT91C_PA0_SPI0_MISO|AT91C_PA1_SPI0_MOSI));
+	AT91F_PIO_CfgPullup(AT91C_BASE_PIOA,AT91C_PA27_SPI0_NPCS1);
+#endif	
+
+	iounmap(paddr);
+	//reset spi		
+	paddr = ioremap(AT91A_SPI0_CR,4);	
+	*paddr |=  AT91_SPI_RESTART;
+	iounmap(paddr);
+		
+	//intrupt disable
+	//AT91_SPI0_IDR &= 0xffffffff;
+	
+	//master mode // 1101 npcs1
+	paddr = ioremap(AT91A_SPI0_MR,4);
+	*paddr = AT91_SPI_NPCS_MASTER;	
+	iounmap(paddr);
+	
+	//set csr1   AT91C_SPI_CPOL   100kbps //cpol =1 ncpha =0;
+	paddr = ioremap(AT91A_SPI0_CSR1,4);
+	*paddr = (0x3 | (AT91C_SPI_DLYBS & (ADC_DLYS)) | (AT91C_SPI_DLYBCT & DATAFLASH_TCHS) | (0x30 << 8)| (0x7 << 4));
+	iounmap(paddr);
+	printk("spi_config is OK \n");
+	return 0;
+}
+
+/*----------------------------------------------------------------------*/
+int spi_open(struct inode *inode,struct file *file)
+{
+	printk("*****************************************\n");
+	printk("open the spi just now\n");
+	spi_config();
+	paddr = ioremap(AT91A_SPI0_CR,4);	
+	*paddr |=  AT91_SPI_ENABLE;
+	iounmap(paddr);
+	
+//	AT91_spi0_CR |=0x01;
+
+	paddr = ioremap(AT91A_SPI0_TDR,4);	
+	*paddr |=  0x000D5555;
+	iounmap(paddr);
+	printk("open the spi over....\n");
+	//AT91_SPI0_TDR = 0x000D5555;
+
+#if 0	
+	while(!(AT91_SPI0_SR & (0x1 <<16)))
+	{
+		AT91_SPI0_CR =  0x1;//enable spi0		
+		clock = AT91_SPI0_CR;
+	}	
+#endif
+	printk("*****************************************\n");
+	return 0;
+}
+/*----------------------------------------------------------------------*/	
+static ssize_t  spi_read(struct file *file, char __user *buf, size_t count, loff_t *f_pos)
+{
+	printk("*****************************************\n");
+	paddr = ioremap(AT91A_SPI0_SR,4);
+	printk("spi read .....\n");	
+	
+	while(!((*paddr) & 0x1))
+	{	
+		iounmap(paddr);	
+		paddr = ioremap(AT91A_SPI0_SR,4);
+	}
+	iounmap(paddr);
+	paddr = ioremap(AT91A_SPI0_RDR,4);
+	kbuf = (int)(*(paddr) & 0xffff);
+	printk("the number is 0x%x \n",kbuf);	
+	iounmap(paddr);		
+	put_user(kbuf,(int*)buf);
+#if 0
+	paddr = ioremap(AT91A_SPI0_SR,4);
+
+	
+	if(*paddr & (0x1<<3)){ //overs
+		
+		printk("overs error\n");
+		iounmap(paddr);
+		return -1;
+	}
+
+	if(*paddr & (0x1<<4)){//end of recive
+		printk("end of recive\n");	
+		iounmap(paddr);	
+		return -1;
+	}
+	iounmap(paddr);
+#endif
+	printk("copt_to_user is over\n");
+	printk("*****************************************\n");
+	return 0;
+}	
+/*----------------------------------------------------------------------*/
+static ssize_t  spi_write(struct file *file, const char __user *buf, size_t count, loff_t *f_pos)
+{	
+	return 0;
+}
+
+/*----------------------------------------------------------------------*/
+int spi_ioctl(struct inode *inode, struct file *file,unsigned int cmd, unsigned long arg)
+{	
+	return 0;
+}
+
+/*----------------------------------------------------------------------*/
+int spi_release(struct inode *inode, struct file *file)
+{	
+	paddr = ioremap(AT91A_SPI0_SR,4);
+	*paddr |=0x02; //disable spi
+	printk("adc_spi_Release^.........\n");
+	printk("*****************************************\n");
+	iounmap(paddr);
+	return 0;
+}
+
+//*--------------------------------------------------------------------------------------
+//* Function Name       : Main
+//* Object              : Software entry point
+//* Input Parameters    : none.
+//* Output Parameters   : none.
+//*--------------------------------------------------------------------------------------
+struct file_operations spi_fops={
+
+	open:spi_open,
+	read:spi_read,
+	write:spi_write,
+	ioctl:spi_ioctl,
+	release:spi_release,
+	
+}; 
+
+
+int __init spi_driver_init(void)
+{
+	int rc;
+	printk("*****************************************\n");
+	printk("start to spi reg chrder....\n");
+				
+	if ((rc = register_chrdev(SPI_MAJOR, DEVICENAME , &spi_fops)) < 0){
+		printk("spi_driver: can't get major %d\n", SPI_MAJOR);
+		return 1;
+	}
+	printk("the module adc is insert\n");
+	printk("*****************************************\n");
+	return 0;
+}
+
+/*----------------------------------------------------------------------*/
+void __exit spi_driver_exit(void)
+{
+	unregister_chrdev(SPI_MAJOR, DEVICENAME);
+	printk("exit the spi driver\n");
+			
+}
+
+module_init(spi_driver_init);
+module_exit(spi_driver_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Karsten Jeppesen <karsten@jeppesens.com>");
+MODULE_DESCRIPTION("Driver for the Total Impact briQ front panel");

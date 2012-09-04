@@ -1,0 +1,22 @@
+ifeq ($(KERNELRELEASE),)
+
+    # Assume the source tree is where the running kernel was built
+    # You should set KERNELDIR in the environment if it's elsewhere
+    # The current directory is passed to sub-makes as argument
+obj-m += adc.o
+else
+
+KERNELDIR:=/home/mazhiming/linux-2.6.22
+
+modules:
+
+	make  -C $(KERNELDIR) M=$(PWD) modules
+
+clean:
+	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions
+
+.PHONY: clean
+
+    # called from kernel build system: just declare what our modules are
+endif
+

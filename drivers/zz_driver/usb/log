@@ -1,0 +1,8 @@
+make: Entering directory `/home/garfunkle/work/linux-2.6.22'
+  CC [M]  /home/garfunkle/work/UsbDriver-0430/core0516/udp.o
+  LD [M]  /home/garfunkle/work/UsbDriver-0430/core0516/usbtest.o
+  Building modules, stage 2.
+  MODPOST 1 modules
+  CC      /home/garfunkle/work/UsbDriver-0430/core0516/usbtest.mod.o
+  LD [M]  /home/garfunkle/work/UsbDriver-0430/core0516/usbtest.ko
+make: Leaving directory `/home/garfunkle/work/linux-2.6.22'

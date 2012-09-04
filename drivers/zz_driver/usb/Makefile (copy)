@@ -1,0 +1,3 @@
+obj-m += usbtest.o
+usbtest-objs := enumeration_example.o standard.o udp.o
+

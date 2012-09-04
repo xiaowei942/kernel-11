@@ -1,0 +1,2499 @@
+Index: kernel/power/Kconfig
+===================================================================
+--- linux-2.6.24/kernel/power/Kconfig	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/kernel/power/Kconfig	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -44,9 +44,30 @@ config PM_VERBOSE
+ 	---help---
+ 	This option enables verbose messages from the Power Management code.
+ 
++config CAN_PM_TRACE
++	def_bool y
++	depends on PM_DEBUG && PM_SLEEP && EXPERIMENTAL
++
+ config PM_TRACE
++	bool
++	---help---
++	This enables code to save the last PM event point across
++	reboot. The architecture needs to support this, x86 for
++	example does by saving things in the RTC, see below.
++
++	The architecture specific code must provide the extern
++	functions from <linux/resume-trace.h> as well as the
++	<asm/resume-trace.h> header with a TRACE_RESUME() macro.
++
++	The way the information is presented is architecture-
++	dependent, x86 will print the information during a
++	late_initcall.
++
++config PM_TRACE_RTC
+ 	bool "Suspend/resume event tracing"
+-	depends on PM_DEBUG && X86 && PM_SLEEP && EXPERIMENTAL
++	depends on CAN_PM_TRACE
++	depends on X86
++	select PM_TRACE
+ 	default n
+ 	---help---
+ 	This enables some cheesy code to save the last PM event point in the
+Index: include/video/atmel_lcdc.h
+===================================================================
+--- linux-2.6.24/include/video/atmel_lcdc.h	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/include/video/atmel_lcdc.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -22,6 +22,15 @@
+ #ifndef __ATMEL_LCDC_H__
+ #define __ATMEL_LCDC_H__
+ 
++
++/* Way LCD wires are connected to the chip:
++ * Some Atmel chips use BGR color mode (instead of standard RGB)
++ * A swapped wiring onboard can bring to RGB mode.
++ */
++#define ATMEL_LCDC_WIRING_BGR	0
++#define ATMEL_LCDC_WIRING_RGB	1
++
++
+  /* LCD Controller info data structure, stored in device platform_data */
+ struct atmel_lcdfb_info {
+ 	spinlock_t		lock;
+@@ -42,6 +51,7 @@ struct atmel_lcdfb_info {
+ 	u8			saved_lcdcon;
+ 
+ 	u8			default_bpp;
++	u8			lcd_wiring_mode;
+ 	unsigned int		default_lcdcon2;
+ 	unsigned int		default_dmacon;
+ 	void (*atmel_lcdfb_power_control)(int on);
+Index: include/asm-arm/arch-at91/at91sam9rl.h
+===================================================================
+--- linux-2.6.24/include/asm-arm/arch-at91/at91sam9rl.h	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/include/asm-arm/arch-at91/at91sam9rl.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -110,6 +110,6 @@
+ #define AT91SAM9RL_ROM_SIZE	(2 * SZ_16K)	/* Internal ROM size (32Kb) */
+ 
+ #define AT91SAM9RL_LCDC_BASE	0x00500000	/* LCD Controller */
+-#define AT91SAM9RL_UDPHS_BASE	0x00600000	/* USB Device HS controller */
++#define AT91SAM9RL_UDPHS_FIFO	0x00600000	/* USB Device HS controller */
+ 
+ #endif
+Index: include/asm-arm/arch-at91/at91_pmc.h
+===================================================================
+--- linux-2.6.24/include/asm-arm/arch-at91/at91_pmc.h	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/include/asm-arm/arch-at91/at91_pmc.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -39,10 +39,12 @@
+ #define	AT91_PMC_PCSR		(AT91_PMC + 0x18)	/* Peripheral Clock Status Register */
+ 
+ #define	AT91_CKGR_UCKR		(AT91_PMC + 0x1C)	/* UTMI Clock Register [SAM9RL, CAP9] */
++#define		AT91_PMC_UPLLEN		(1 << 16)		/* UTMI PLL */
++#define		AT91_PMC_BIASEN		(1 << 24)		/* UTMI BIAS */
+ 
+-#define	AT91_CKGR_MOR		(AT91_PMC + 0x20)	/* Main Oscillator Register [not on SAM9RL] */
++#define	AT91_CKGR_MOR		(AT91_PMC + 0x20)	/* Main Oscillator Register */
+ #define		AT91_PMC_MOSCEN		(1    << 0)		/* Main Oscillator Enable */
+-#define		AT91_PMC_OSCBYPASS	(1    << 1)		/* Oscillator Bypass [AT91SAM926x only] */
++#define		AT91_PMC_OSCBYPASS	(1    << 1)		/* Oscillator Bypass [SAM9x, CAP9] */
+ #define		AT91_PMC_OSCOUNT	(0xff << 8)		/* Main Oscillator Start-up Time */
+ 
+ #define	AT91_CKGR_MCFR		(AT91_PMC + 0x24)	/* Main Clock Frequency Register */
+@@ -93,6 +95,7 @@
+ #define		AT91_PMC_LOCKA		(1 <<  1)		/* PLLA Lock */
+ #define		AT91_PMC_LOCKB		(1 <<  2)		/* PLLB Lock */
+ #define		AT91_PMC_MCKRDY		(1 <<  3)		/* Master Clock */
++#define		AT91_PMC_LOCKU		(1 <<  6)		/* UPLL Lock [SAM9RL, CAP9] */
+ #define		AT91_PMC_PCK0RDY	(1 <<  8)		/* Programmable Clock 0 */
+ #define		AT91_PMC_PCK1RDY	(1 <<  9)		/* Programmable Clock 1 */
+ #define		AT91_PMC_PCK2RDY	(1 << 10)		/* Programmable Clock 2 */
+Index: include/asm-arm/arch-at91/board.h
+===================================================================
+--- linux-2.6.24/include/asm-arm/arch-at91/board.h	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/include/asm-arm/arch-at91/board.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -36,6 +36,7 @@
+ #include <linux/i2c.h>
+ #include <linux/leds.h>
+ #include <linux/spi/spi.h>
++#include <linux/usb/atmel_usba_udc.h>
+ 
+  /* USB Device */
+ struct at91_udc_data {
+@@ -43,6 +44,8 @@ struct at91_udc_data {
+ 	u8	pullup_pin;		/* high == D+ pulled up */
+ };
+ extern void __init at91_add_device_udc(struct at91_udc_data *data);
++ /* USB High Speed Device */
++extern void __init at91_add_device_usba(struct at91_udc_data *data);
+ 
+  /* Compact Flash */
+ struct at91_cf_data {
+Index: include/linux/usb/atmel_usba_udc.h
+===================================================================
+--- linux-2.6.24/include/linux/usb/atmel_usba_udc.h	(.../linux-2.6.24-at91)	(revision 0)
++++ linux-2.6.24/include/linux/usb/atmel_usba_udc.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -0,0 +1,22 @@
++/*
++ * Platform data definitions for Atmel USBA gadget driver.
++ */
++#ifndef __LINUX_USB_USBA_H
++#define __LINUX_USB_USBA_H
++
++struct usba_ep_data {
++	char	*name;
++	int	index;
++	int	fifo_size;
++	int	nr_banks;
++	int	can_dma;
++	int	can_isoc;
++};
++
++struct usba_platform_data {
++	int			vbus_pin;
++	int			num_ep;
++	struct usba_ep_data	ep[0];
++};
++
++#endif /* __LINUX_USB_USBA_H */
+Index: sound/arm/Kconfig
+===================================================================
+--- linux-2.6.24/sound/arm/Kconfig	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/sound/arm/Kconfig	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -33,4 +33,13 @@ config SND_PXA2XX_AC97
+ 	  Say Y or M if you want to support any AC97 codec attached to
+ 	  the PXA2xx AC97 interface.
+ 
++config SND_AT91_AC97
++	tristate "AC97 Controller driver for SAM926X familly from ATMEL"
++	depends on SND && ARCH_AT91
++	select SND_PCM
++	select SND_AC97_CODEC
++	help
++	  Say Y or M if you want to support any AC97 codec attached to
++	  the SAM926X AC97 Controller.
++
+ endmenu
+Index: sound/arm/at91-ac97.c
+===================================================================
+--- linux-2.6.24/sound/arm/at91-ac97.c	(.../linux-2.6.24-at91)	(revision 0)
++++ linux-2.6.24/sound/arm/at91-ac97.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -0,0 +1,669 @@
++/*
++ * linux/arch/arm/mach-at91/board-sam9260ek.c
++ *
++ *  Copyright (C) 2005 SAN People
++ *  Copyright (C) 2006 Atmel
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++ */
++
++
++#undef DEBUG
++#include <linux/platform_device.h>
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/delay.h>
++#include <linux/clk.h>
++#include <linux/atmel_pdc.h>
++
++#include <sound/driver.h>
++#include <sound/core.h>
++#include <sound/initval.h>
++#include <sound/pcm.h>
++#include <sound/ac97_codec.h>
++
++#include <asm/io.h>
++#include <asm/hardware.h>
++#include <asm/cacheflush.h>
++
++#include <asm/arch/gpio.h>
++#include "at91-ac97.h"
++#include <asm/arch/board.h>
++
++#define platform_num_resources(dev)     ((dev)->num_resources)
++#define platform_resource_start(dev, i) ((dev)->resource[(i)].start)
++#define platform_resource_end(dev, i)   ((dev)->resource[(i)].end)
++#define platform_resource_flags(dev, i) ((dev)->resource[(i)].flags)
++#define platform_resource_len(dev, i)                   \
++        (platform_resource_end((dev), (i)) -            \
++         platform_resource_start((dev), (i)) + 1)
++
++
++/*
++ * module parameters
++ */
++static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
++static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
++static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
++
++module_param_array(index, int, NULL, 0444);
++MODULE_PARM_DESC(index, "Index value for AC97 controller");
++module_param_array(id, charp, NULL, 0444);
++MODULE_PARM_DESC(id, "ID string for AC97 controller");
++module_param_array(enable, bool, NULL, 0444);
++MODULE_PARM_DESC(enable, "Enable AC97 controller");
++
++typedef struct at91_ac97 {
++	spinlock_t lock;
++	void *regs;
++	int period;
++	struct clk *ac97_clk;
++	struct snd_pcm_substream *playback_substream;
++	struct snd_card *card;
++	struct snd_pcm *pcm;
++	struct snd_ac97 *ac97;
++	struct snd_ac97_bus *ac97_bus;
++	int irq;
++	struct platform_device *pdev;
++	u8 reset_pin;
++} at91_ac97_t;
++
++#define get_chip(card) ((at91_ac97_t *)(card)->private_data)
++
++#define ac97c_writel(chip, reg, val)			\
++	writel((val), (chip)->regs + AC97C_##reg)
++
++#define ac97c_readl(chip, reg)				\
++	readl((chip)->regs + AC97C_##reg)
++
++
++/*
++ * PIO management functions
++ */
++void at91_ac97c_drive_reset(at91_ac97_t *chip, unsigned int value)
++{
++	at91_set_gpio_value(chip->reset_pin, value);
++}
++
++static const char driver_name[] = "at91-ac97";
++
++
++/*
++ * PCM part
++ */
++static struct snd_pcm_hardware snd_at91_ac97_hw = {
++	.info			= (SNDRV_PCM_INFO_INTERLEAVED
++				   | SNDRV_PCM_INFO_MMAP
++				   | SNDRV_PCM_INFO_MMAP_VALID
++                                   | SNDRV_PCM_INFO_BLOCK_TRANSFER),
++	.formats		= SNDRV_PCM_FMTBIT_S16_LE,
++	.rates			= SNDRV_PCM_RATE_CONTINUOUS,
++	.rate_min		= 8000,
++	.rate_max		= 48000,
++	.channels_min		= 2,
++	.channels_max		= 2,
++	.buffer_bytes_max	= 256*1024,
++	.period_bytes_min	= 1024,
++	.period_bytes_max	= 4*1024,
++	.periods_min		= 1,
++	.periods_max		= 64,
++};
++
++static int snd_at91_ac97_playback_open(struct snd_pcm_substream *substream)
++{
++	at91_ac97_t *chip = snd_pcm_substream_chip(substream);
++	struct snd_pcm_runtime *runtime = substream->runtime;
++
++	runtime->hw = snd_at91_ac97_hw;
++	chip->playback_substream = substream;
++	chip->period = 0;
++
++	snd_printd(KERN_DEBUG "%s : snd_at91_ac97_playback_open\n\r", driver_name);
++
++	return 0;
++}
++
++static int snd_at91_ac97_playback_close(struct snd_pcm_substream *substream)
++{
++        at91_ac97_t *chip = snd_pcm_substream_chip(substream);
++
++        chip->playback_substream = NULL;
++	return 0;
++}
++
++static int snd_at91_ac97_hw_params(struct snd_pcm_substream *substream,
++				    struct snd_pcm_hw_params *hw_params)
++{
++	int err;
++
++	err = snd_pcm_lib_malloc_pages(substream,
++				       params_buffer_bytes(hw_params));
++	return err;
++}
++
++static int snd_at91_ac97_hw_free(struct snd_pcm_substream *substream)
++{
++
++	snd_pcm_lib_free_pages(substream);
++
++	return 0;
++}
++
++static int snd_at91_ac97_playback_prepare(struct snd_pcm_substream *substream)
++{
++	at91_ac97_t *chip = snd_pcm_substream_chip(substream);
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	int block_size = frames_to_bytes(runtime, runtime->period_size);
++	unsigned long word = 0;
++
++	//clean_dcache_region(runtime->dma_area, block_size * 2);
++	snd_printd(KERN_DEBUG "%s : block_size = %d\n\r", driver_name, block_size);
++
++	/* Assign slots to channels */
++	switch (substream->runtime->channels) {
++          /* TODO: Support more than two channels */
++        case 1:
++          word |= AT91C_AC97C_CHID3_CA;
++          break;
++	case 2:
++        default:
++          /* Assign Left and Right slots (3,4) to Channel A */
++          word |= AT91C_AC97C_CHID3_CA | AT91C_AC97C_CHID4_CA;
++          break;
++	}
++
++	ac97c_writel(chip, OCA, word);
++
++	/*
++	 * Configure sample format and size.
++	 * FIXME: Avoid conflicts with capture channel.
++	 */
++        word = AT91C_AC97C_PDCEN | AT91C_AC97C_SIZE_16_BITS;
++
++        switch (runtime->format){
++        case SNDRV_PCM_FORMAT_S16_BE:
++          word |= AT91C_AC97C_CEM;
++          break;
++        case SNDRV_PCM_FORMAT_S16_LE:
++        default:
++          break;
++        }
++
++	ac97c_writel(chip, CAMR, word);
++
++        /* Set variable rate if needed */
++        if ( runtime->rate != 48000 ){
++          word = ac97c_readl(chip, MR);
++          word |= AT91C_AC97C_VRA;
++          ac97c_writel(chip, MR, word);
++        } else {
++          /* Clear Variable Rate Bit */
++          word = ac97c_readl(chip, MR);
++          word &= ~AT91C_AC97C_VRA;
++          ac97c_writel(chip, MR, word);
++        }
++
++        /* Set rate */
++        snd_ac97_set_rate(chip->ac97, AC97_PCM_FRONT_DAC_RATE, runtime->rate);
++
++	snd_printd(KERN_DEBUG "%s : dma_addr = %x\n\r : dma_area = %x\n\r : dma_bytes = %d\n\r",
++		   driver_name, runtime->dma_addr, runtime->dma_area, runtime->dma_bytes);
++
++	/* Initialize and start the PDC */
++	writel(runtime->dma_addr, chip->regs + ATMEL_PDC_TPR);
++	writel(block_size / 2, chip->regs + ATMEL_PDC_TCR);
++	writel(runtime->dma_addr + block_size, chip->regs + ATMEL_PDC_TNPR);
++	writel(block_size / 2, chip->regs + ATMEL_PDC_TNCR);
++
++	/* Enable Channel A interrupts */
++	ac97c_writel(chip, IER, AT91C_AC97C_CAEVT);
++
++	snd_printd(KERN_DEBUG "%s : snd_at91_ac97_playback_prepare\n\r", driver_name);
++
++	return 0;
++}
++
++static int snd_at91_ac97_playback_trigger(struct snd_pcm_substream *substream, int cmd)
++{
++	at91_ac97_t *chip = snd_pcm_substream_chip(substream);
++	unsigned long camr, ptcr = 0, flags;
++	int err = 0;
++
++	spin_lock_irqsave(&chip->lock, flags);
++	camr = ac97c_readl(chip, CAMR);
++
++	switch (cmd) {
++	case SNDRV_PCM_TRIGGER_START:
++          camr |= (AT91C_AC97C_CEN | AT91C_AC97C_ENDTX);
++	  ptcr = ATMEL_PDC_TXTEN;
++	  break;
++	case SNDRV_PCM_TRIGGER_STOP:
++          camr &= ~(AT91C_AC97C_CEN | AT91C_AC97C_ENDTX);
++	  ptcr = ATMEL_PDC_TXTDIS;
++          break;
++	default:
++          err = -EINVAL;
++          break;
++	}
++
++	ac97c_writel(chip, CAMR, camr);
++	writel(ptcr, chip->regs + ATMEL_PDC_PTCR);
++
++	spin_unlock_irqrestore(&chip->lock, flags);
++
++	snd_printd(KERN_DEBUG "%s : snd_at91_ac97_playback_trigger\n\r", driver_name);
++
++	return err;
++}
++
++static  snd_pcm_uframes_t snd_at91_ac97_playback_pointer(struct snd_pcm_substream *substream)
++{
++	at91_ac97_t *chip = snd_pcm_substream_chip(substream);
++	struct snd_pcm_runtime *runtime = substream->runtime;
++	snd_pcm_uframes_t pos;
++	unsigned long bytes;
++
++	bytes = readl(chip->regs + ATMEL_PDC_TPR) - runtime->dma_addr;
++
++	pos = bytes_to_frames(runtime, bytes);
++	if (pos >= runtime->buffer_size)
++		pos -= runtime->buffer_size;
++
++	snd_printd(KERN_DEBUG "%s : snd_at91_ac97_playback_pointer\n\r", driver_name);
++
++	return pos;
++}
++
++static struct snd_pcm_ops at91_ac97_playback_ops = {
++	.open		= snd_at91_ac97_playback_open,
++	.close		= snd_at91_ac97_playback_close,
++	.ioctl		= snd_pcm_lib_ioctl,
++	.hw_params	= snd_at91_ac97_hw_params,
++	.hw_free	= snd_at91_ac97_hw_free,
++	.prepare	= snd_at91_ac97_playback_prepare,
++	.trigger	= snd_at91_ac97_playback_trigger,
++	.pointer	= snd_at91_ac97_playback_pointer,
++};
++
++static struct ac97_pcm at91_ac97_pcm_defs[] __devinitdata = {
++	/* Playback */
++	{
++		.exclusive = 1,
++		.r = { {
++			.slots = ((1 << AC97_SLOT_PCM_LEFT)
++				  | (1 << AC97_SLOT_PCM_RIGHT)),
++		} },
++	},
++};
++
++static int __devinit snd_at91_ac97_pcm_new(at91_ac97_t *chip)
++{
++	struct snd_pcm *pcm;
++	int err;
++
++	err = snd_ac97_pcm_assign(chip->ac97_bus, 1, at91_ac97_pcm_defs);
++	if (err)
++		return err;
++
++	err = snd_pcm_new(chip->card, "Atmel AC97", 0, 1, 0, &pcm);
++	if (err)
++		return err;
++
++	snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,
++					      &chip->pdev->dev,
++					      128 * 1024, 256 * 1024);
++
++	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &at91_ac97_playback_ops);
++
++	pcm->private_data = chip;
++	pcm->info_flags = 0;
++	strcpy(pcm->name, "Atmel AC97");
++	chip->pcm = pcm;
++
++	return 0;
++}
++
++
++/*
++ * Mixer part
++ */
++static int snd_at91_ac97_mixer_new(at91_ac97_t *chip)
++{
++	int err;
++	struct snd_ac97_template template;
++
++	memset(&template, 0, sizeof(template));
++	template.private_data = chip;
++	template.num = 0;
++	template.addr = 0;
++	err = snd_ac97_mixer(chip->ac97_bus, &template, &chip->ac97);
++
++	return err;
++}
++
++static irqreturn_t snd_at91_ac97_interrupt(int irq, void *dev_id)
++{
++	at91_ac97_t *chip = dev_id;
++	unsigned long status;
++	unsigned long dummy;
++
++	status = ac97c_readl(chip, SR);
++
++	if (status & AT91C_AC97C_CAEVT) {
++		struct snd_pcm_runtime *runtime;
++		int offset, next_period, block_size;
++		unsigned long casr;
++
++		runtime = chip->playback_substream->runtime;
++		block_size = frames_to_bytes(runtime, runtime->period_size);
++
++		casr = ac97c_readl(chip, CASR);
++
++		if (casr & AT91C_AC97C_ENDTX) {
++			chip->period++;
++			if (chip->period == runtime->periods)
++				chip->period = 0;
++			next_period = chip->period + 1;
++			if (next_period == runtime->periods)
++				next_period = 0;
++
++			offset = block_size * next_period;
++
++			writel(runtime->dma_addr + offset, chip->regs + ATMEL_PDC_TNPR);
++			writel(block_size / 2, chip->regs + ATMEL_PDC_TNCR);
++
++			snd_pcm_period_elapsed(chip->playback_substream);
++		} else {
++                  printk(KERN_WARNING
++                         "Spurious AC97A interrupt, status = 0x%08lx\n",
++                         (unsigned long)casr);
++		}
++	} else {
++		printk(KERN_WARNING
++		       "Spurious AC97 interrupt, status = 0x%08lx\n",
++		       status);
++	}
++
++	dummy = ac97c_readl(chip, SR);
++
++	return IRQ_HANDLED;
++}
++
++
++/* 
++ * CODEC part
++ */
++static void snd_at91_ac97_hard_reset(at91_ac97_t *chip)
++{
++       // Enable AC97 Controller.
++       // Perform a cold (hard) reset of the AC97 codec.
++       ac97c_writel(chip, MR, 0);
++       ac97c_writel(chip, MR, AT91C_AC97C_ENA);
++
++       at91_ac97c_drive_reset(chip, 0);
++       udelay(1);
++       at91_ac97c_drive_reset(chip, 1);
++       udelay(1);
++}
++
++static void snd_at91_ac97_write(struct snd_ac97 *ac97, unsigned short reg,
++				 unsigned short val)
++{
++	at91_ac97_t *chip = ac97->private_data;
++	unsigned long word;
++	int timeout = 0x100;
++
++	snd_printd(KERN_DEBUG "%s : Writing codec register 0x%x = 0x%x\n\r", driver_name, reg, val);
++
++	word = (reg & 0x7f) << 16 | val;
++
++	do {
++		if (ac97c_readl(chip, COSR) & AT91C_AC97C_TXRDY) {
++			ac97c_writel(chip, COTHR, word);
++			return;
++		}
++		udelay(1);
++	} while (--timeout);
++
++	snd_printk(KERN_WARNING "at91-ac97: codec write timeout\n\r");
++}
++
++static unsigned short snd_at91_ac97_read(struct snd_ac97 *ac97,
++					  unsigned short reg)
++{
++	at91_ac97_t *chip = ac97->private_data;
++	unsigned long word;
++	int timeout = 0x100;
++
++
++	word = (0x80 | (reg & 0x7f)) << 16;
++
++	do {
++                if (ac97c_readl(chip, COSR) & AT91C_AC97C_TXRDY){
++                     ac97c_writel(chip, COTHR, word);
++                     break;
++                }
++		udelay(1);
++	} while (--timeout);
++
++	if (!timeout)
++		goto timed_out;
++
++	timeout = 0x100;
++
++	do {
++                if (ac97c_readl(chip, COSR) & AT91C_AC97C_RXRDY){
++                     unsigned short val = (unsigned short) ac97c_readl(chip, CORHR);
++		     return val;
++		}
++		udelay(1);
++	} while (--timeout);
++
++	if (!timeout)
++		goto timed_out;
++
++timed_out:
++	snd_printk(KERN_WARNING "at91-ac97: codec read timeout\n\r");
++	return 0xffff;
++}
++
++static void snd_at91_ac97_warm_reset(struct snd_ac97 *ac97)
++{
++        at91_ac97_t *chip = ac97->private_data;
++	volatile unsigned int mr = ac97c_readl(chip, MR);
++
++	mr |= AT91C_AC97C_WRST;
++
++	ac97c_writel(chip, MR, mr);
++	udelay(1);
++
++	mr &= ~AT91C_AC97C_WRST;
++	ac97c_writel(chip, MR, mr);
++}
++
++static void snd_at91_ac97_destroy(struct snd_card *card)
++{
++	at91_ac97_t *chip = get_chip(card);
++
++	if (chip->irq != -1)
++		free_irq(chip->irq, chip);
++
++	if (chip->regs)
++		iounmap(chip->regs);
++}
++
++static int __devinit snd_at91_ac97_create(struct snd_card *card,
++					   struct platform_device *pdev)
++{
++	static struct snd_ac97_bus_ops ops = {
++		.write	= snd_at91_ac97_write,
++		.read	= snd_at91_ac97_read,
++		.reset  = snd_at91_ac97_warm_reset,
++	};
++
++	at91_ac97_t *chip = get_chip(card);
++	int irq, err = 0;
++
++
++
++	card->private_free = snd_at91_ac97_destroy;
++
++	spin_lock_init(&chip->lock);
++	chip->card = card;
++	chip->pdev = pdev;
++	chip->irq = -1;
++
++	if (!(platform_resource_flags(pdev, 0) & IORESOURCE_MEM)
++	    || !(platform_resource_flags(pdev, 1) & IORESOURCE_IRQ))
++		return -ENODEV;
++
++	irq = platform_resource_start(pdev, 1);
++
++	err = request_irq(irq, snd_at91_ac97_interrupt, 0, "ac97", chip);
++	if (err) {
++		snd_printk(KERN_WARNING "unable to request IRQ%d\n", irq);
++		return err;
++	}
++
++	chip->irq = irq;
++    	snd_printk(KERN_INFO "AC97C regs = %08X \n", platform_resource_start(pdev, 0));
++    	snd_printk(KERN_INFO "AC97C irq  = %d \n",irq);
++
++	chip->regs = ioremap(platform_resource_start(pdev, 0),
++			     platform_resource_len(pdev, 0));
++	if (!chip->regs) {
++	        snd_printk(KERN_WARNING "unable to remap AC97C io memory\n");
++		return -ENOMEM;
++	}
++
++	snd_card_set_dev(card, &pdev->dev);
++
++	err = snd_ac97_bus(card, 0, &ops, chip, &chip->ac97_bus);
++
++	return err;
++}
++
++static int __devinit snd_at91_ac97_probe(struct platform_device *pdev)
++{
++	static int dev;
++	struct atmel_ac97_data *pdata = pdev->dev.platform_data;
++	struct snd_card *card;
++	at91_ac97_t *chip;
++	int err;
++
++
++	if (dev >= SNDRV_CARDS)
++		return -ENODEV;
++	if (!enable[dev]) {
++		dev++;
++		return -ENOENT;
++	}
++
++	card = snd_card_new(index[dev], id[dev], THIS_MODULE,
++			    sizeof(at91_ac97_t));
++	if (!card)
++		return -ENOMEM;
++	chip = get_chip(card);
++
++	err = snd_at91_ac97_create(card, pdev);
++	if (err)
++		goto out_free_card;
++
++	// Enable AC97 Controller clock
++	chip->reset_pin = pdata->reset_pin;
++	chip->ac97_clk = clk_get(NULL, "ac97_clk");
++	if(!chip->ac97_clk)
++		goto out_free_card;
++
++	clk_enable(chip->ac97_clk);
++
++	// Perform a codec hard reset.
++	// This also enables the AC97 Controller.
++	snd_at91_ac97_hard_reset(chip);
++
++	err = snd_at91_ac97_mixer_new(chip);
++	if (err)
++		goto out_free_card;
++
++	err = snd_at91_ac97_pcm_new(chip);
++	if (err)
++		goto out_free_card;
++
++	strcpy(card->driver, "ac97c");
++	strcpy(card->shortname, "Atmel AC97");
++	sprintf(card->longname, "Atmel AC97 Controller at %#lx, irq %i",
++		(unsigned long) platform_resource_start(pdev, 0), (int) chip->irq);
++
++	err = snd_card_register(card);
++	if (err)
++		goto out_free_card;
++
++	dev_set_drvdata(&pdev->dev, card);
++	dev++;
++	return 0;
++
++out_free_card:
++	snd_card_free(card);
++	return err;
++}
++
++static int __devexit snd_at91_ac97_remove(struct  platform_device *pdev)
++{
++        struct snd_card *card = dev_get_drvdata(&pdev->dev);
++	at91_ac97_t *chip = get_chip(card);
++
++
++	snd_card_free(card);
++
++	// Disable AC97 Controller
++	ac97c_writel(chip, MR, 0);
++
++	// Disable AC97 Controller clock
++	clk_disable(chip->ac97_clk);
++
++	dev_set_drvdata(&pdev->dev, NULL);
++
++	return 0;
++}
++
++static struct platform_driver at91_ac97_driver =
++{
++	.probe      = snd_at91_ac97_probe,
++	.remove     = __devexit_p(snd_at91_ac97_remove),
++	.driver     =
++	{
++		.name       = "ac97c",
++	}
++	,
++};
++
++static int __init at91_ac97_init(void)
++{
++	return platform_driver_register(&at91_ac97_driver);
++}
++
++static void __exit at91_ac97_exit(void)
++{
++	platform_driver_unregister(&at91_ac97_driver);
++}
++
++module_init(at91_ac97_init);
++module_exit(at91_ac97_exit);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("Driver for Atmel AC97 Controller");
++MODULE_AUTHOR("Atmel");
++
+Index: sound/arm/at91-ac97.h
+===================================================================
+--- linux-2.6.24/sound/arm/at91-ac97.h	(.../linux-2.6.24-at91)	(revision 0)
++++ linux-2.6.24/sound/arm/at91-ac97.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -0,0 +1,281 @@
++/* linux/include/asm-arm/arch-at91rm9200/ac97c.h
++ *
++ * Hardware definition for the ac97c peripheral in the ATMEL at91sam926x processor
++ *
++ * Generated  12/09/2005 (11:54:20) AT91 SW Application Group from AC97C_XXXX V1.3
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.
++ *
++ * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT ARE
++ * DISCLAIMED. IN NO EVENT SHALL ATMEL BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
++ * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
++ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
++ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
++ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ *
++ * You should have received a copy of the  GNU General Public License along
++ * with this program; if not, write  to the Free Software Foundation, Inc.,
++ * 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++
++#ifndef __AC97C_H
++#define __AC97C_H
++
++/* -------------------------------------------------------- */
++/* AC97C ID definitions for  AT91SAM926x           */
++/* -------------------------------------------------------- */
++#ifndef AT91C_ID_AC97C
++#define AT91C_ID_AC97C 	18 /**< AC97 Controller id */
++#endif /* AT91C_ID_AC97C */
++
++/* -------------------------------------------------------- */
++/* AC97C Base Address definitions for  AT91SAM926x   */
++/* -------------------------------------------------------- */
++#define AT91C_BASE_AC97C     	0xFFFA0000 /**< AC97C base address */
++
++/* -------------------------------------------------------- */
++/* PIO definition for AC97C hardware peripheral */
++/* -------------------------------------------------------- */
++#define AT91C_PB1_AC97CK   	(1 << 1) /**<  */
++#define AT91C_PB0_AC97FS   	(1 << 0) /**<  */
++#define AT91C_PB3_AC97RX   	(1 << 3) /**<  */
++#define AT91C_PB2_AC97TX   	(1 << 2) /**<  */
++
++/* -------------------------------------------------------- */
++/* Register offset definition for AC97C hardware peripheral */
++/* -------------------------------------------------------- */
++#define AC97C_MR 	(0x0008) 	/**< Mode Register */
++#define AC97C_ICA 	(0x0010) 	/**< Input Channel AssignementRegister */
++#define AC97C_OCA 	(0x0014) 	/**< Output Channel Assignement Register */
++#define AC97C_CARHR 	(0x0020) 	/**< Channel A Receive Holding Register */
++#define AC97C_CATHR 	(0x0024) 	/**< Channel A Transmit Holding Register */
++#define AC97C_CASR 	(0x0028) 	/**< Channel A Status Register */
++#define AC97C_CAMR 	(0x002C) 	/**< Channel A Mode Register */
++#define AC97C_CBRHR 	(0x0030) 	/**< Channel B Receive Holding Register (optional) */
++#define AC97C_CBTHR 	(0x0034) 	/**< Channel B Transmit Holding Register (optional) */
++#define AC97C_CBSR 	(0x0038) 	/**< Channel B Status Register */
++#define AC97C_CBMR 	(0x003C) 	/**< Channel B Mode Register */
++#define AC97C_CORHR 	(0x0040) 	/**< COdec Transmit Holding Register */
++#define AC97C_COTHR 	(0x0044) 	/**< COdec Transmit Holding Register */
++#define AC97C_COSR 	(0x0048) 	/**< CODEC Status Register */
++#define AC97C_COMR 	(0x004C) 	/**< CODEC Mask Status Register */
++#define AC97C_SR 	(0x0050) 	/**< Status Register */
++#define AC97C_IER 	(0x0054) 	/**< Interrupt Enable Register */
++#define AC97C_IDR 	(0x0058) 	/**< Interrupt Disable Register */
++#define AC97C_IMR 	(0x005C) 	/**< Interrupt Mask Register */
++#define AC97C_VERSION 	(0x00FC) 	/**< Version Register */
++
++/* -------------------------------------------------------- */
++/* Bitfields definition for AC97C hardware peripheral */
++/* -------------------------------------------------------- */
++/* --- Register AC97C_MR */
++#define AT91C_AC97C_ENA       (0x1 << 0 ) /**< (AC97C) AC97 Controller Global Enable */
++#define AT91C_AC97C_WRST      (0x1 << 1 ) /**< (AC97C) Warm Reset */
++#define AT91C_AC97C_VRA       (0x1 << 2 ) /**< (AC97C) Variable RAte (for Data Slots) */
++/* --- Register AC97C_ICA */
++#define AT91C_AC97C_CHID3     (0x7 << 0 ) /**< (AC97C) Channel Id for the input slot 3 */
++#define 	AT91C_AC97C_CHID3_NONE                 0x0 /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CA                   0x1 /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CB                   0x2 /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CC                   0x3 /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID4     (0x7 << 3 ) /**< (AC97C) Channel Id for the input slot 4 */
++#define 	AT91C_AC97C_CHID4_NONE                 (0x0 <<  3) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CA                   (0x1 <<  3) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CB                   (0x2 <<  3) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CC                   (0x3 <<  3) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID5     (0x7 << 6 ) /**< (AC97C) Channel Id for the input slot 5 */
++#define 	AT91C_AC97C_CHID5_NONE                 (0x0 <<  6) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CA                   (0x1 <<  6) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CB                   (0x2 <<  6) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CC                   (0x3 <<  6) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID6     (0x7 << 9 ) /**< (AC97C) Channel Id for the input slot 6 */
++#define 	AT91C_AC97C_CHID6_NONE                 (0x0 <<  9) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CA                   (0x1 <<  9) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CB                   (0x2 <<  9) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CC                   (0x3 <<  9) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID7     (0x7 << 12) /**< (AC97C) Channel Id for the input slot 7 */
++#define 	AT91C_AC97C_CHID7_NONE                 (0x0 << 12) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CA                   (0x1 << 12) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CB                   (0x2 << 12) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CC                   (0x3 << 12) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID8     (0x7 << 15) /**< (AC97C) Channel Id for the input slot 8 */
++#define 	AT91C_AC97C_CHID8_NONE                 (0x0 << 15) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CA                   (0x1 << 15) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CB                   (0x2 << 15) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CC                   (0x3 << 15) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID9     (0x7 << 18) /**< (AC97C) Channel Id for the input slot 9 */
++#define 	AT91C_AC97C_CHID9_NONE                 (0x0 << 18) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CA                   (0x1 << 18) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CB                   (0x2 << 18) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CC                   (0x3 << 18) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID10    (0x7 << 21) /**< (AC97C) Channel Id for the input slot 10 */
++#define 	AT91C_AC97C_CHID10_NONE                 (0x0 << 21) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CA                   (0x1 << 21) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CB                   (0x2 << 21) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CC                   (0x3 << 21) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID11    (0x7 << 24) /**< (AC97C) Channel Id for the input slot 11 */
++#define 	AT91C_AC97C_CHID11_NONE                 (0x0 << 24) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CA                   (0x1 << 24) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CB                   (0x2 << 24) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CC                   (0x3 << 24) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID12    (0x7 << 27) /**< (AC97C) Channel Id for the input slot 12 */
++#define 	AT91C_AC97C_CHID12_NONE                 (0x0 << 27) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CA                   (0x1 << 27) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CB                   (0x2 << 27) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CC                   (0x3 << 27) /**< (AC97C) Channel C data will be transmitted during this slot */
++/* --- Register AC97C_OCA */
++#define AT91C_AC97C_CHID3     (0x7 << 0 ) /**< (AC97C) Channel Id for the input slot 3 */
++#define 	AT91C_AC97C_CHID3_NONE                 0x0 /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CA                   0x1 /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CB                   0x2 /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID3_CC                   0x3 /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID4     (0x7 << 3 ) /**< (AC97C) Channel Id for the input slot 4 */
++#define 	AT91C_AC97C_CHID4_NONE                 (0x0 <<  3) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CA                   (0x1 <<  3) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CB                   (0x2 <<  3) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID4_CC                   (0x3 <<  3) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID5     (0x7 << 6 ) /**< (AC97C) Channel Id for the input slot 5 */
++#define 	AT91C_AC97C_CHID5_NONE                 (0x0 <<  6) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CA                   (0x1 <<  6) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CB                   (0x2 <<  6) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID5_CC                   (0x3 <<  6) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID6     (0x7 << 9 ) /**< (AC97C) Channel Id for the input slot 6 */
++#define 	AT91C_AC97C_CHID6_NONE                 (0x0 <<  9) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CA                   (0x1 <<  9) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CB                   (0x2 <<  9) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID6_CC                   (0x3 <<  9) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID7     (0x7 << 12) /**< (AC97C) Channel Id for the input slot 7 */
++#define 	AT91C_AC97C_CHID7_NONE                 (0x0 << 12) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CA                   (0x1 << 12) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CB                   (0x2 << 12) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID7_CC                   (0x3 << 12) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID8     (0x7 << 15) /**< (AC97C) Channel Id for the input slot 8 */
++#define 	AT91C_AC97C_CHID8_NONE                 (0x0 << 15) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CA                   (0x1 << 15) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CB                   (0x2 << 15) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID8_CC                   (0x3 << 15) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID9     (0x7 << 18) /**< (AC97C) Channel Id for the input slot 9 */
++#define 	AT91C_AC97C_CHID9_NONE                 (0x0 << 18) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CA                   (0x1 << 18) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CB                   (0x2 << 18) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID9_CC                   (0x3 << 18) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID10    (0x7 << 21) /**< (AC97C) Channel Id for the input slot 10 */
++#define 	AT91C_AC97C_CHID10_NONE                 (0x0 << 21) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CA                   (0x1 << 21) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CB                   (0x2 << 21) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID10_CC                   (0x3 << 21) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID11    (0x7 << 24) /**< (AC97C) Channel Id for the input slot 11 */
++#define 	AT91C_AC97C_CHID11_NONE                 (0x0 << 24) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CA                   (0x1 << 24) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CB                   (0x2 << 24) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID11_CC                   (0x3 << 24) /**< (AC97C) Channel C data will be transmitted during this slot */
++#define AT91C_AC97C_CHID12    (0x7 << 27) /**< (AC97C) Channel Id for the input slot 12 */
++#define 	AT91C_AC97C_CHID12_NONE                 (0x0 << 27) /**< (AC97C) No data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CA                   (0x1 << 27) /**< (AC97C) Channel A data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CB                   (0x2 << 27) /**< (AC97C) Channel B data will be transmitted during this slot */
++#define 	AT91C_AC97C_CHID12_CC                   (0x3 << 27) /**< (AC97C) Channel C data will be transmitted during this slot */
++/* --- Register AC97C_CARHR */
++#define AT91C_AC97C_RDATA     (0xFFFFF << 0 ) /**< (AC97C) Receive data */
++/* --- Register AC97C_CATHR */
++#define AT91C_AC97C_TDATA     (0xFFFFF << 0 ) /**< (AC97C) Transmit data */
++/* --- Register AC97C_CASR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++#define AT91C_AC97C_OVRUN     (0x1 << 5 ) /**< (AC97C)  */
++#define AT91C_AC97C_ENDTX     (0x1 << 10) /**< (AC97C)  */
++#define AT91C_AC97C_TXBUFE    (0x1 << 11) /**< (AC97C)  */
++#define AT91C_AC97C_ENDRX     (0x1 << 14) /**< (AC97C)  */
++#define AT91C_AC97C_RXBUFF    (0x1 << 15) /**< (AC97C)  */
++/* --- Register AC97C_CAMR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++#define AT91C_AC97C_OVRUN     (0x1 << 5 ) /**< (AC97C)  */
++#define AT91C_AC97C_ENDTX     (0x1 << 10) /**< (AC97C)  */
++#define AT91C_AC97C_TXBUFE    (0x1 << 11) /**< (AC97C)  */
++#define AT91C_AC97C_ENDRX     (0x1 << 14) /**< (AC97C)  */
++#define AT91C_AC97C_RXBUFF    (0x1 << 15) /**< (AC97C)  */
++#define AT91C_AC97C_SIZE      (0x3 << 16) /**< (AC97C)  */
++#define 	AT91C_AC97C_SIZE_20_BITS              (0x0 << 16) /**< (AC97C) Data size is 20 bits */
++#define 	AT91C_AC97C_SIZE_18_BITS              (0x1 << 16) /**< (AC97C) Data size is 18 bits */
++#define 	AT91C_AC97C_SIZE_16_BITS              (0x2 << 16) /**< (AC97C) Data size is 16 bits */
++#define 	AT91C_AC97C_SIZE_10_BITS              (0x3 << 16) /**< (AC97C) Data size is 10 bits */
++#define AT91C_AC97C_CEM       (0x1 << 18) /**< (AC97C)  */
++#define AT91C_AC97C_CEN       (0x1 << 21) /**< (AC97C)  */
++#define AT91C_AC97C_PDCEN     (0x1 << 22) /**< (AC97C)  */
++/* --- Register AC97C_CBRHR */
++#define AT91C_AC97C_RDATA     (0xFFFFF << 0 ) /**< (AC97C) Receive data */
++/* --- Register AC97C_CBTHR */
++#define AT91C_AC97C_TDATA     (0xFFFFF << 0 ) /**< (AC97C) Transmit data */
++/* --- Register AC97C_CBSR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++#define AT91C_AC97C_OVRUN     (0x1 << 5 ) /**< (AC97C)  */
++/* --- Register AC97C_CBMR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++#define AT91C_AC97C_OVRUN     (0x1 << 5 ) /**< (AC97C)  */
++#define AT91C_AC97C_SIZE      (0x3 << 16) /**< (AC97C)  */
++#define 	AT91C_AC97C_SIZE_20_BITS              (0x0 << 16) /**< (AC97C) Data size is 20 bits */
++#define 	AT91C_AC97C_SIZE_18_BITS              (0x1 << 16) /**< (AC97C) Data size is 18 bits */
++#define 	AT91C_AC97C_SIZE_16_BITS              (0x2 << 16) /**< (AC97C) Data size is 16 bits */
++#define 	AT91C_AC97C_SIZE_10_BITS              (0x3 << 16) /**< (AC97C) Data size is 10 bits */
++#define AT91C_AC97C_CEM       (0x1 << 18) /**< (AC97C)  */
++#define AT91C_AC97C_CEN       (0x1 << 21) /**< (AC97C)  */
++/* --- Register AC97C_CORHR */
++#define AT91C_AC97C_SDATA     (0xFFFF << 0 ) /**< (AC97C) Status Data */
++/* --- Register AC97C_COTHR */
++#define AT91C_AC97C_CDATA     (0xFFFF << 0 ) /**< (AC97C) Command Data */
++#define AT91C_AC97C_CADDR     (0x7F << 16) /**< (AC97C) COdec control register index */
++#define AT91C_AC97C_READ      (0x1 << 23) /**< (AC97C) Read/Write command */
++/* --- Register AC97C_COSR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++/* --- Register AC97C_COMR */
++#define AT91C_AC97C_TXRDY     (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_TXEMPTY   (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_UNRUN     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_RXRDY     (0x1 << 4 ) /**< (AC97C)  */
++/* --- Register AC97C_SR */
++#define AT91C_AC97C_SOF       (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_WKUP      (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_COEVT     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_CAEVT     (0x1 << 3 ) /**< (AC97C)  */
++#define AT91C_AC97C_CBEVT     (0x1 << 4 ) /**< (AC97C)  */
++/* --- Register AC97C_IER */
++#define AT91C_AC97C_SOF       (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_WKUP      (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_COEVT     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_CAEVT     (0x1 << 3 ) /**< (AC97C)  */
++#define AT91C_AC97C_CBEVT     (0x1 << 4 ) /**< (AC97C)  */
++/* --- Register AC97C_IDR */
++#define AT91C_AC97C_SOF       (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_WKUP      (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_COEVT     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_CAEVT     (0x1 << 3 ) /**< (AC97C)  */
++#define AT91C_AC97C_CBEVT     (0x1 << 4 ) /**< (AC97C)  */
++/* --- Register AC97C_IMR */
++#define AT91C_AC97C_SOF       (0x1 << 0 ) /**< (AC97C)  */
++#define AT91C_AC97C_WKUP      (0x1 << 1 ) /**< (AC97C)  */
++#define AT91C_AC97C_COEVT     (0x1 << 2 ) /**< (AC97C)  */
++#define AT91C_AC97C_CAEVT     (0x1 << 3 ) /**< (AC97C)  */
++#define AT91C_AC97C_CBEVT     (0x1 << 4 ) /**< (AC97C)  */
++
++#endif /* __AC97C_H */
+Index: sound/arm/Makefile
+===================================================================
+--- linux-2.6.24/sound/arm/Makefile	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/sound/arm/Makefile	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -13,3 +13,7 @@ snd-pxa2xx-pcm-objs		:= pxa2xx-pcm.o
+ 
+ obj-$(CONFIG_SND_PXA2XX_AC97)	+= snd-pxa2xx-ac97.o
+ snd-pxa2xx-ac97-objs		:= pxa2xx-ac97.o
++
++obj-$(CONFIG_SND_AT91_AC97)	+= snd-at91-ac97.o
++snd-at91-ac97-objs		:= at91-ac97.o
++
+Index: arch/arm/mach-at91/Kconfig
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/Kconfig	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/Kconfig	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -277,6 +277,13 @@ config MTD_NAND_AT91_BUSWIDTH_16
+ 	  On AT91SAM926x boards both types of NAND flash can be present
+ 	  (8 and 16 bit data bus width).
+ 
++config ATMEL_LCDC_WIRING_RGB
++	bool "Enable RGB mode for Atmel LCD Controller"
++	depends on (MACH_AT91SAM9261EK || MACH_AT91SAM9263EK)
++	help
++	  Some Atmel chips use BGR color mode (instead of standard RGB)
++	  A swapped wiring onboard can bring to RGB mode.
++
+ # ----------------------------------------------------------
+ 
+ comment "AT91 Feature Selections"
+Index: arch/arm/mach-at91/at91sam9260_devices.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/at91sam9260_devices.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/at91sam9260_devices.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -642,7 +642,7 @@ static struct resource rtt_resources[] =
+ 
+ static struct platform_device at91sam9260_rtt_device = {
+ 	.name		= "at91_rtt",
+-	.id		= -1,
++	.id		= 0,
+ 	.resource	= rtt_resources,
+ 	.num_resources	= ARRAY_SIZE(rtt_resources),
+ };
+@@ -749,7 +749,7 @@ void __init at91_add_device_ssc(unsigned
+ }
+ 
+ #else
+-struct platform_device *__init at91_add_device_ssc(unsigned id, unsigned pins) {}
++void __init at91_add_device_ssc(unsigned id, unsigned pins) {}
+ #endif
+ 
+ 
+Index: arch/arm/mach-at91/at91sam9261_devices.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/at91sam9261_devices.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/at91sam9261_devices.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -610,7 +610,7 @@ static struct resource rtt_resources[] =
+ 
+ static struct platform_device at91sam9261_rtt_device = {
+ 	.name		= "at91_rtt",
+-	.id		= -1,
++	.id		= 0,
+ 	.resource	= rtt_resources,
+ 	.num_resources	= ARRAY_SIZE(rtt_resources),
+ };
+Index: arch/arm/mach-at91/at91sam9263_devices.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/at91sam9263_devices.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/at91sam9263_devices.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -660,7 +660,7 @@ void __init at91_add_device_ac97(struct 
+ 	if (data->reset_pin)
+ 		at91_set_gpio_output(data->reset_pin, 0);
+ 
+-	ac97_data = *ek_data;
++	ac97_data = *data;
+ 	platform_device_register(&at91sam9263_ac97_device);
+ }
+ #else
+@@ -1008,7 +1008,7 @@ void __init at91_add_device_ssc(unsigned
+ }
+ 
+ #else
+-struct platform_device *__init at91_add_device_ssc(unsigned id, unsigned pins) {}
++void __init at91_add_device_ssc(unsigned id, unsigned pins) {}
+ #endif
+ 
+ 
+Index: arch/arm/mach-at91/board-sam9260ek.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/board-sam9260ek.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/board-sam9260ek.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -107,8 +107,7 @@ static void __init at73c213_set_clk(stru
+ 	at91_set_B_periph(AT91_PIN_PC1, 0);	/* PCK0 */
+ 
+ 	clk_set_parent(pck0, plla);
+-	clk_set_rate(pck0, 12416000);
+-	clk_enable(pck0);
++	clk_put(plla);
+ 
+ 	info->dac_clk = pck0;
+ }
+@@ -165,11 +164,11 @@ static struct mtd_partition __initdata e
+ 	{
+ 		.name	= "Partition 1",
+ 		.offset	= 0,
+-		.size	= 256 * 1024,
++		.size	= 64 * 1024 * 1024,
+ 	},
+ 	{
+ 		.name	= "Partition 2",
+-		.offset	= 256 * 1024,
++		.offset	= 64 * 1024 * 1024,
+ 		.size	= MTDPART_SIZ_FULL,
+ 	},
+ };
+@@ -238,8 +237,12 @@ static void __init ek_board_init(void)
+ 	at91_add_device_nand(&ek_nand_data);
+ 	/* Ethernet */
+ 	at91_add_device_eth(&ek_macb_data);
++#if defined(CONFIG_MMC_AT91)
++	/* disable spi0 clock */
++	at91_set_gpio_input(AT91_PIN_PA2, 0);  /* SPI0_SPCK shared with MCCK */
+ 	/* MMC */
+ 	at91_add_device_mmc(0, &ek_mmc_data);
++#endif
+ 	/* I2C */
+ 	at91_add_device_i2c(NULL, 0);
+ 	/* SSC (to AT73C213) */
+Index: arch/arm/mach-at91/board-sam9261ek.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/board-sam9261ek.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/board-sam9261ek.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -169,11 +169,11 @@ static struct mtd_partition __initdata e
+ 	{
+ 		.name	= "Partition 1",
+ 		.offset	= 0,
+-		.size	= 256 * 1024,
++		.size	= 64 * 1024 * 1024,
+ 	},
+ 	{
+ 		.name	= "Partition 2",
+-		.offset	= 256 * 1024 ,
++		.offset	= 64 * 1024 * 1024,
+ 		.size	= MTDPART_SIZ_FULL,
+ 	},
+ };
+@@ -254,8 +254,7 @@ static void __init at73c213_set_clk(stru
+ 	at91_set_B_periph(AT91_PIN_PB31, 0);	/* PCK2 */
+ 
+ 	clk_set_parent(pck2, plla);
+-	clk_set_rate(pck2, 12416000);
+-	clk_enable(pck2);
++	clk_put(plla);
+ 
+ 	info->dac_clk = pck2;
+ }
+@@ -416,6 +415,9 @@ static struct atmel_lcdfb_info __initdat
+ 	.default_bpp			= 16,
+ 	.default_dmacon			= ATMEL_LCDC_DMAEN,
+ 	.default_lcdcon2		= AT91SAM9261_DEFAULT_TFT_LCDCON2,
++#if defined(CONFIG_ATMEL_LCDC_WIRING_RGB)
++	.lcd_wiring_mode		= ATMEL_LCDC_WIRING_RGB,
++#endif
+ 	.default_monspecs		= &at91fb_default_tft_monspecs,
+ 	.atmel_lcdfb_power_control	= at91_lcdc_tft_power_control,
+ 	.guard_time			= 1,
+@@ -437,24 +439,28 @@ static struct gpio_keys_button ek_button
+ 		.code		= BTN_0,
+ 		.desc		= "Button 0",
+ 		.active_low	= 1,
++		.wakeup		= 1,
+ 	},
+ 	{
+ 		.gpio		= AT91_PIN_PA26,
+ 		.code		= BTN_1,
+ 		.desc		= "Button 1",
+ 		.active_low	= 1,
++		.wakeup		= 1,
+ 	},
+ 	{
+ 		.gpio		= AT91_PIN_PA25,
+ 		.code		= BTN_2,
+ 		.desc		= "Button 2",
+ 		.active_low	= 1,
++		.wakeup		= 1,
+ 	},
+ 	{
+ 		.gpio		= AT91_PIN_PA24,
+ 		.code		= BTN_3,
+ 		.desc		= "Button 3",
+ 		.active_low	= 1,
++		.wakeup		= 1,
+ 	}
+ };
+ 
+Index: arch/arm/mach-at91/board-sam9263ek.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/board-sam9263ek.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/board-sam9263ek.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -249,6 +249,9 @@ static struct atmel_lcdfb_info __initdat
+ 	.default_bpp			= 16,
+ 	.default_dmacon			= ATMEL_LCDC_DMAEN,
+ 	.default_lcdcon2		= AT91SAM9263_DEFAULT_LCDCON2,
++#if defined(CONFIG_ATMEL_LCDC_WIRING_RGB)
++	.lcd_wiring_mode		= ATMEL_LCDC_WIRING_RGB,
++#endif
+ 	.default_monspecs		= &at91fb_default_monspecs,
+ 	.atmel_lcdfb_power_control	= at91_lcdc_power_control,
+ 	.guard_time			= 1,
+Index: arch/arm/mach-at91/at91sam9rl_devices.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/at91sam9rl_devices.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/at91sam9rl_devices.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -26,6 +26,96 @@
+ 
+ 
+ /* --------------------------------------------------------------------
++ *  USB HS Device (Gadget)
++ * -------------------------------------------------------------------- */
++
++#if defined(CONFIG_USB_GADGET_ATMEL_USBA) || defined(CONFIG_USB_GADGET_ATMEL_USBA_MODULE)
++
++static struct resource usba_udc_resources[] = {
++	[0] = {
++		.start	= AT91SAM9RL_UDPHS_FIFO,
++		.end	= AT91SAM9RL_UDPHS_FIFO + SZ_512K - 1,
++		.flags	= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start	= AT91SAM9RL_BASE_UDPHS,
++		.end	= AT91SAM9RL_BASE_UDPHS + SZ_1K - 1,
++		.flags	= IORESOURCE_MEM,
++	},
++	[2] = {
++		.start	= AT91SAM9RL_ID_UDPHS,
++		.end	= AT91SAM9RL_ID_UDPHS,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++#define EP(nam, idx, maxpkt, maxbk, dma, isoc)			\
++	[idx] = {						\
++		.name		= nam,				\
++		.index		= idx,				\
++		.fifo_size	= maxpkt,			\
++		.nr_banks	= maxbk,			\
++		.can_dma	= dma,				\
++		.can_isoc	= isoc,				\
++	}
++
++static struct usba_ep_data usba_udc_ep[] __initdata = {
++	EP("ep0", 0, 64, 1, 0, 0),
++	EP("ep1", 1, 1024, 2, 1, 1),
++	EP("ep2", 2, 1024, 2, 1, 1),
++	EP("ep3", 3, 1024, 3, 1, 0),
++	EP("ep4", 4, 1024, 3, 1, 0),
++	EP("ep5", 5, 1024, 3, 1, 1),
++	EP("ep6", 6, 1024, 3, 1, 1),
++};
++
++#undef EP
++
++/*
++ * pdata doesn't have room for any endpoints, so we need to
++ * append room for the ones we need right after it.
++ */
++static struct {
++	struct usba_platform_data pdata;
++	struct usba_ep_data ep[7];
++} usba_udc_data;
++
++static struct platform_device at91_usba_udc_device = {
++	.name		= "atmel_usba_udc",
++	.id		= -1,
++	.dev		= {
++				.platform_data	= &usba_udc_data.pdata,
++	},
++	.resource	= usba_udc_resources,
++	.num_resources	= ARRAY_SIZE(usba_udc_resources),
++};
++
++void __init at91_add_device_usba(struct at91_udc_data *data)
++{
++	usba_udc_data.pdata.vbus_pin = -EINVAL;
++	usba_udc_data.pdata.num_ep = ARRAY_SIZE(usba_udc_ep);
++	memcpy(usba_udc_data.ep, usba_udc_ep, sizeof(usba_udc_ep));;
++
++	if (data && data->vbus_pin >= 0) {
++		at91_set_gpio_input(data->vbus_pin, 0);
++		at91_set_deglitch(data->vbus_pin, 1);
++		usba_udc_data.pdata.vbus_pin = data->vbus_pin;
++	}
++
++	/* Pullup pin is handled internally by USB device peripheral */
++
++	/* Clocks */
++	at91_clock_associate("utmi_clk", &at91_usba_udc_device.dev, "hclk");
++	at91_clock_associate("udphs_clk", &at91_usba_udc_device.dev, "pclk");
++
++	platform_device_register(&at91_usba_udc_device);
++}
++#else
++void __init at91_add_device_usba(struct at91_udc_data *data) {}
++#endif
++
++
++/* --------------------------------------------------------------------
+  *  MMC / SD
+  * -------------------------------------------------------------------- */
+ 
+@@ -141,12 +231,12 @@ void __init at91_add_device_nand(struct 
+ 	at91_sys_write(AT91_SMC_SETUP(3), AT91_SMC_NWESETUP_(0) | AT91_SMC_NCS_WRSETUP_(0)
+ 			| AT91_SMC_NRDSETUP_(0) | AT91_SMC_NCS_RDSETUP_(0));
+ 
+-	at91_sys_write(AT91_SMC_PULSE(3), AT91_SMC_NWEPULSE_(2) | AT91_SMC_NCS_WRPULSE_(5)
+-			| AT91_SMC_NRDPULSE_(2) | AT91_SMC_NCS_RDPULSE_(5));
++	at91_sys_write(AT91_SMC_PULSE(3), AT91_SMC_NWEPULSE_(3) | AT91_SMC_NCS_WRPULSE_(3)
++			| AT91_SMC_NRDPULSE_(3) | AT91_SMC_NCS_RDPULSE_(3));
+ 
+-	at91_sys_write(AT91_SMC_CYCLE(3), AT91_SMC_NWECYCLE_(7) | AT91_SMC_NRDCYCLE_(7));
++	at91_sys_write(AT91_SMC_CYCLE(3), AT91_SMC_NWECYCLE_(5) | AT91_SMC_NRDCYCLE_(5));
+ 
+-	at91_sys_write(AT91_SMC_MODE(3), AT91_SMC_DBW_8 | AT91_SMC_READMODE | AT91_SMC_WRITEMODE | AT91_SMC_EXNWMODE_DISABLE | AT91_SMC_TDF_(1));
++	at91_sys_write(AT91_SMC_MODE(3), AT91_SMC_DBW_8 | AT91_SMC_READMODE | AT91_SMC_WRITEMODE | AT91_SMC_EXNWMODE_DISABLE | AT91_SMC_TDF_(2));
+ 
+ 	/* enable pin */
+ 	if (data->enable_pin)
+@@ -314,6 +404,61 @@ void __init at91_add_device_spi(struct s
+ 
+ 
+ /* --------------------------------------------------------------------
++ *  AC97
++ * -------------------------------------------------------------------- */
++
++#if defined(CONFIG_SND_AT91_AC97) || defined(CONFIG_SND_AT91_AC97_MODULE)
++static u64 ac97_dmamask = DMA_BIT_MASK(32);
++static struct atmel_ac97_data ac97_data;
++
++static struct resource ac97_resources[] = {
++	[0] = {
++		.start	= AT91SAM9RL_BASE_AC97C,
++		.end	= AT91SAM9RL_BASE_AC97C + SZ_16K - 1,
++		.flags	= IORESOURCE_MEM,
++	},
++	[1] = {
++		.start	= AT91SAM9RL_ID_AC97C,
++		.end	= AT91SAM9RL_ID_AC97C,
++		.flags	= IORESOURCE_IRQ,
++	},
++};
++
++static struct platform_device at91sam9rl_ac97_device = {
++	.name		= "ac97c",
++	.id		= 1,
++	.dev		= {
++				.dma_mask		= &ac97_dmamask,
++				.coherent_dma_mask	= DMA_BIT_MASK(32),
++				.platform_data		= &ac97_data,
++	},
++	.resource	= ac97_resources,
++	.num_resources	= ARRAY_SIZE(ac97_resources),
++};
++
++void __init at91_add_device_ac97(struct atmel_ac97_data *data)
++{
++	if (!data)
++		return;
++
++	at91_set_A_periph(AT91_PIN_PD1, 0);	/* AC97FS */
++	at91_set_A_periph(AT91_PIN_PD2, 0);	/* AC97CK */
++	at91_set_A_periph(AT91_PIN_PD3, 0);	/* AC97TX */
++	at91_set_A_periph(AT91_PIN_PD4, 0);	/* AC97RX */
++
++	/* reset */
++	if (data->reset_pin)
++		at91_set_gpio_output(data->reset_pin, 0);
++
++	ac97_data = *data;
++	platform_device_register(&at91sam9rl_ac97_device);
++}
++#else
++void __init at91_add_device_ac97(struct atmel_ac97_data *data) {}
++#endif
++
++
++/* --------------------------------------------------------------------
+  *  LCD Controller
+  * -------------------------------------------------------------------- */
+ 
+@@ -473,7 +618,7 @@ static struct resource rtt_resources[] =
+ 
+ static struct platform_device at91sam9rl_rtt_device = {
+ 	.name		= "at91_rtt",
+-	.id		= -1,
++	.id		= 0,
+ 	.resource	= rtt_resources,
+ 	.num_resources	= ARRAY_SIZE(rtt_resources),
+ };
+@@ -627,7 +772,7 @@ void __init at91_add_device_ssc(unsigned
+ }
+ 
+ #else
+-struct platform_device *__init at91_add_device_ssc(unsigned id, unsigned pins) {}
++void __init at91_add_device_ssc(unsigned id, unsigned pins) {}
+ #endif
+ 
+ 
+Index: arch/arm/mach-at91/board-sam9rlek.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/board-sam9rlek.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/board-sam9rlek.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -14,7 +14,8 @@
+ #include <linux/platform_device.h>
+ #include <linux/spi/spi.h>
+ #include <linux/fb.h>
+-#include <linux/clk.h>
++#include <linux/gpio_keys.h>
++#include <linux/input.h>
+ 
+ #include <video/atmel_lcdc.h>
+ 
+@@ -56,6 +57,15 @@ static void __init ek_init_irq(void)
+ 
+ 
+ /*
++ * USB HS Device port
++ */
++static struct at91_udc_data __initdata ek_usba_udc_data = {
++	.vbus_pin	= AT91_PIN_PA8,
++	.pullup_pin	= 0,		/* pull-up driven by UDC */
++};
++
++
++/*
+  * MCI (SD/MMC)
+  */
+ static struct at91_mmc_data __initdata ek_mmc_data = {
+@@ -73,11 +83,11 @@ static struct mtd_partition __initdata e
+ 	{
+ 		.name	= "Partition 1",
+ 		.offset	= 0,
+-		.size	= 256 * 1024,
++		.size	= 64 * 1024 * 1024,
+ 	},
+ 	{
+ 		.name	= "Partition 2",
+-		.offset	= 256 * 1024 ,
++		.offset	= 64 * 1024 * 1024,
+ 		.size	= MTDPART_SIZ_FULL,
+ 	},
+ };
+@@ -158,9 +168,11 @@ static void at91_lcdc_power_control(int 
+ 
+ /* Driver datas */
+ static struct atmel_lcdfb_info __initdata ek_lcdc_data = {
++	.lcdcon_is_backlight		= true,
+ 	.default_bpp			= 16,
+ 	.default_dmacon			= ATMEL_LCDC_DMAEN,
+ 	.default_lcdcon2		= AT91SAM9RL_DEFAULT_LCDCON2,
++	.lcd_wiring_mode		= ATMEL_LCDC_WIRING_RGB,
+ 	.default_monspecs		= &at91fb_default_monspecs,
+ 	.atmel_lcdfb_power_control	= at91_lcdc_power_control,
+ 	.guard_time			= 1,
+@@ -171,10 +183,93 @@ static struct atmel_lcdfb_info __initdat
+ #endif
+ 
+ 
++/*
++ * GPIO Buttons
++ */
++#if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
++static struct gpio_keys_button ek_buttons[] = {
++	{	/* BP1, "leftclic" */
++		.code		= BTN_LEFT,
++		.gpio		= AT91_PIN_PB0,
++		.active_low	= 1,
++		.desc		= "left_click",
++		.wakeup		= 1,
++	},
++	{	/* BP2, "rightclic" */
++		.code		= BTN_RIGHT,
++		.gpio		= AT91_PIN_PB1,
++		.active_low	= 1,
++		.desc		= "right_click",
++		.wakeup		= 1,
++	},
++};
++
++static struct gpio_keys_platform_data ek_button_data = {
++	.buttons	= ek_buttons,
++	.nbuttons	= ARRAY_SIZE(ek_buttons),
++};
++
++static struct platform_device ek_button_device = {
++	.name		= "gpio-keys",
++	.id		= -1,
++	.num_resources	= 0,
++	.dev		= {
++		.platform_data	= &ek_button_data,
++	}
++};
++
++static void __init ek_add_device_buttons(void)
++{
++	at91_set_GPIO_periph(AT91_PIN_PB0, 0);	/* left button */
++	at91_set_deglitch(AT91_PIN_PC5, 1);
++	at91_set_GPIO_periph(AT91_PIN_PB1, 0);	/* right button */
++	at91_set_deglitch(AT91_PIN_PC4, 1);
++
++	platform_device_register(&ek_button_device);
++}
++#else
++static void __init ek_add_device_buttons(void) {}
++#endif
++
++
++/*
++ * AC97
++ */
++static struct atmel_ac97_data ek_ac97_data = {
++//	.reset_pin	= ... not connected: NRST,
++};
++
++
++/*
++ * LEDs ... these could all be PWM-driven, for variable brightness
++ */
++static struct gpio_led ek_leds[] = {
++	{	/* "left" led, green, userled1, pwm1 */
++		.name			= "ds1",
++		.gpio			= AT91_PIN_PD15,
++		.active_low		= 1,
++		.default_trigger	= "mmc0",
++	},
++	{	/* "right" led, green, userled2, pwm2 */
++		.name			= "ds2",
++		.gpio			= AT91_PIN_PD16,
++		.active_low		= 1,
++		.default_trigger	= "nand-disk",
++	},
++	{	/* "power" led, yellow, pwm0 */
++		.name			= "ds3",
++		.gpio			= AT91_PIN_PD14,
++		.default_trigger	= "heartbeat",
++	}
++};
++
++
+ static void __init ek_board_init(void)
+ {
+ 	/* Serial */
+ 	at91_add_device_serial();
++	/* USB HS */
++	at91_add_device_usba(&ek_usba_udc_data);
+ 	/* I2C */
+ 	at91_add_device_i2c(NULL, 0);
+ 	/* NAND */
+@@ -185,6 +280,12 @@ static void __init ek_board_init(void)
+ 	at91_add_device_mmc(0, &ek_mmc_data);
+ 	/* LCD Controller */
+ 	at91_add_device_lcdc(&ek_lcdc_data);
++	/* Push Buttons */
++	ek_add_device_buttons();
++	/* AC97 */
++	at91_add_device_ac97(&ek_ac97_data);
++	/* LEDs */
++	at91_gpio_leds(ek_leds, ARRAY_SIZE(ek_leds));
+ 	/* shutdown controller, wakeup button (5 msec low) */
+ 	at91_sys_write(AT91_SHDW_MR, AT91_SHDW_CPTWK0_(10) | AT91_SHDW_WKMODE0_LOW
+ 				| AT91_SHDW_RTTWKEN);
+Index: arch/arm/mach-at91/pm.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/pm.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/pm.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -31,15 +31,20 @@
+ 
+ #include "generic.h"
+ 
++
+ #ifdef CONFIG_ARCH_AT91RM9200
+ #include <asm/arch/at91rm9200_mc.h>
+ 
+-/*
+- * The AT91RM9200 goes into self-refresh mode with this command, and will
+- * terminate self-refresh automatically on the next SDRAM access.
+- */
+-#define sdram_selfrefresh_enable()	at91_sys_write(AT91_SDRAMC_SRR, 1)
+-#define sdram_selfrefresh_disable()	do {} while (0)
++static inline void sdram_selfrefresh_enable(void)
++{
++	at91_sys_write(AT91_SDRAMC_SRR, 1);
++	/* effective on the next instruction */
++}
++
++static inline void sdram_selfrefresh_disable(void)
++{
++	/* automatically disabled by CPU or DMA access */
++}
+ 
+ #elif defined(CONFIG_ARCH_AT91CAP9)
+ #include <asm/arch/at91cap9_ddrsdr.h>
+@@ -60,25 +65,27 @@ static inline void sdram_selfrefresh_ena
+ 
+ #else
+ #include <asm/arch/at91sam926x_sdramc.h>
++#include <asm/arch/at91_shdwc.h>
+ 
+-static u32 saved_lpr;
++#ifdef CONFIG_ARCH_AT91SAM9263
++/*
++ * FIXME the EB1 SDRAM controller might be in use too ... until system
++ * headers change so we can use offsets from a controller base address,
++ * act as if there's only one controller.
++ */
++#define	AT91_SDRAMC	AT91_SDRAMC0
++#warning Assuming EB1 SDRAM controller is *NOT* used
++#endif
+ 
+ static inline void sdram_selfrefresh_enable(void)
+ {
+-	u32 lpr;
+-
+-	saved_lpr = at91_sys_read(AT91_SDRAMC_LPR);
+-
+-	lpr = saved_lpr & ~AT91_SDRAMC_LPCB;
+-	at91_sys_write(AT91_SDRAMC_LPR, lpr | AT91_SDRAMC_LPCB_SELF_REFRESH);
++	at91_sys_write(AT91_SDRAMC_LPR, AT91_SDRAMC_LPCB_SELF_REFRESH);
+ }
+ 
+-#define sdram_selfrefresh_disable()	at91_sys_write(AT91_SDRAMC_LPR, saved_lpr)
+-
+-/*
+- * FIXME: The AT91SAM9263 has a second EBI controller which may have
+- *        additional SDRAM.  pm_slowclock.S will require a similar fix.
+- */
++static inline void sdram_selfrefresh_disable(void)
++{
++	at91_sys_write(AT91_SDRAMC_LPR, AT91_SDRAMC_LPCB_DISABLE);
++}
+ 
+ #endif
+ 
+@@ -164,13 +171,13 @@ extern u32 at91_slow_clock_sz;
+ static int at91_pm_valid_state(suspend_state_t state)
+ {
+ 	switch (state) {
+-		case PM_SUSPEND_ON:
+-		case PM_SUSPEND_STANDBY:
+-		case PM_SUSPEND_MEM:
+-			return 1;
++	case PM_SUSPEND_ON:
++	case PM_SUSPEND_STANDBY:
++	case PM_SUSPEND_MEM:
++		return 1;
+ 
+-		default:
+-			return 0;
++	default:
++		return 0;
+ 	}
+ }
+ 
+@@ -245,6 +252,7 @@ int at91_suspend_entering_slow_clock(voi
+ {
+ 	return (target_state == PM_SUSPEND_MEM);
+ }
++EXPORT_SYMBOL(at91_suspend_entering_slow_clock);
+ 
+ 
+ static void (*slow_clock)(void);
+@@ -282,12 +290,11 @@ static int at91_pm_enter(suspend_state_t
+ 			 * turning off the main oscillator; reverse on wakeup.
+ 			 */
+ 			if (slow_clock) {
+-				/* copy slow_clock handler to SRAM, and call it */
+-				memcpy(slow_clock, at91_slow_clock, at91_slow_clock_sz);
+ 				slow_clock();
+ 				break;
+ 			} else {
+-				pr_info("AT91: PM - no slow clock mode enabled ...\n");
++				/* DEVELOPMENT ONLY */
++				pr_info("AT91: PM - no slow clock mode yet ...\n");
+ 				/* FALLTHROUGH leaving master clock alone */
+ 			}
+ 
+@@ -304,14 +311,15 @@ static int at91_pm_enter(suspend_state_t
+ 			 * wakeup IRQ occurs and self-refresh is terminated.
+ 			 */
+ 			asm("b 1f; .align 5; 1:");
+-			asm("mcr p15, 0, r0, c7, c10, 4");	/* drain write buffer */
++			/* drain write buffer */
++			asm("mcr p15, 0, r0, c7, c10, 4");
+ 			sdram_selfrefresh_enable();
+-			asm("mcr p15, 0, r0, c7, c0, 4");	/* wait for interrupt */
+-			sdram_selfrefresh_disable();
+-			break;
++			/* fall though to next state */
+ 
+ 		case PM_SUSPEND_ON:
+-			asm("mcr p15, 0, r0, c7, c0, 4");	/* wait for interrupt */
++			/* wait for interrupt */
++			asm("mcr p15, 0, r0, c7, c0, 4");
++			sdram_selfrefresh_disable();
+ 			break;
+ 
+ 		default:
+@@ -323,7 +331,6 @@ static int at91_pm_enter(suspend_state_t
+ 			at91_sys_read(AT91_AIC_IPR) & at91_sys_read(AT91_AIC_IMR));
+ 
+ error:
+-	sdram_selfrefresh_disable();
+ 	target_state = PM_SUSPEND_ON;
+ 	at91_irq_resume();
+ 	at91_gpio_resume();
+@@ -340,11 +347,14 @@ static struct platform_suspend_ops at91_
+ 
+ static int __init at91_pm_init(void)
+ {
++	printk("AT91: Power Management\n");
++
+ #ifdef CONFIG_AT91_SLOW_CLOCK
++	/* REVISIT allocations of SRAM should be dynamically managed.
++	 * FIQ handlers and other components will want SRAM/TCM too...
++	 */
+ 	slow_clock = (void *) (AT91_IO_VIRT_BASE - at91_slow_clock_sz);
+-	pr_info("AT91: Power Management (with slow clock mode)\n");
+-#else
+-	pr_info("AT91: Power Management\n");
++	memcpy(slow_clock, at91_slow_clock, at91_slow_clock_sz);
+ #endif
+ 
+ #ifdef CONFIG_ARCH_AT91RM9200
+Index: arch/arm/mach-at91/clock.c
+===================================================================
+--- linux-2.6.24/arch/arm/mach-at91/clock.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/arch/arm/mach-at91/clock.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -114,6 +114,21 @@ static void pmc_sys_mode(struct clk *clk
+ 		at91_sys_write(AT91_PMC_SCDR, clk->pmc_mask);
+ }
+ 
++static void pmc_uckr_mode(struct clk *clk, int is_on)
++{
++	unsigned int uckr = at91_sys_read(AT91_CKGR_UCKR);
++
++	if (is_on) {
++		is_on = AT91_PMC_LOCKU;
++		at91_sys_write(AT91_CKGR_UCKR, uckr | clk->pmc_mask);
++	} else
++		at91_sys_write(AT91_CKGR_UCKR, uckr & ~(clk->pmc_mask));
++
++	do {
++		cpu_relax();
++	} while ((at91_sys_read(AT91_PMC_SR) & AT91_PMC_LOCKU) != is_on);
++}
++
+ /* USB function clocks (PLLB must be 48 MHz) */
+ static struct clk udpck = {
+ 	.name		= "udpck",
+@@ -126,6 +141,14 @@ static struct clk uhpck = {
+ 	.mode		= pmc_sys_mode,
+ };
+ 
++static struct clk utmi_clk = {
++	.name		= "utmi_clk",
++	.parent		= &main_clk,
++	.pmc_mask	= AT91_PMC_UPLLEN,	/* in CKGR_UCKR */
++	.mode		= pmc_uckr_mode,
++	.type		= CLK_TYPE_PLL,
++};
++
+ 
+ /*
+  * The master clock is divided from the CPU clock (by 1-4).  It's used for
+@@ -388,7 +411,10 @@ static int at91_clk_show(struct seq_file
+ 	seq_printf(s, "MOR  = %8x\n", at91_sys_read(AT91_CKGR_MOR));
+ 	seq_printf(s, "MCFR = %8x\n", at91_sys_read(AT91_CKGR_MCFR));
+ 	seq_printf(s, "PLLA = %8x\n", at91_sys_read(AT91_CKGR_PLLAR));
+-	seq_printf(s, "PLLB = %8x\n", at91_sys_read(AT91_CKGR_PLLBR));
++	if (cpu_is_at91sam9rl())
++		seq_printf(s, "UTMI PLL = %8x\n", at91_sys_read(AT91_CKGR_UCKR));
++	else
++		seq_printf(s, "PLLB = %8x\n", at91_sys_read(AT91_CKGR_PLLBR));
+ 	seq_printf(s, "MCKR = %8x\n", at91_sys_read(AT91_PMC_MCKR));
+ 	seq_printf(s, "SR   = %8x\n", sr = at91_sys_read(AT91_PMC_SR));
+ 
+@@ -599,6 +625,14 @@ int __init at91_clock_init(unsigned long
+ 
+ 	udpck.rate_hz = at91_usb_rate(&pllb, pllb.rate_hz, at91_pllb_usb_init);
+ 	uhpck.rate_hz = at91_usb_rate(&pllb, pllb.rate_hz, at91_pllb_usb_init);
++	/*
++	 * USB HS clock init
++	 */
++	if (cpu_is_at91sam9rl()) {
++		/* multiplier is hard-wired to 40
++		 * (obtain the USB High Speed 480 MHz when input is 12 MHz) */
++		utmi_clk.rate_hz = 40 * utmi_clk.parent->rate_hz;
++	}
+ 
+ 	/*
+ 	 * MCK and CPU derive from one of those primary clocks.
+@@ -617,6 +651,10 @@ int __init at91_clock_init(unsigned long
+ 	for (i = 0; i < ARRAY_SIZE(standard_pmc_clocks); i++)
+ 		list_add_tail(&standard_pmc_clocks[i]->node, &clocks);
+ 
++	if (cpu_is_at91sam9rl()) {
++		list_add_tail(&utmi_clk.node, &clocks);
++	}
++
+ 	/* MCK and CPU clock are "always on" */
+ 	clk_enable(&mck);
+ 
+Index: drivers/video/atmel_lcdfb.c
+===================================================================
+--- linux-2.6.24/drivers/video/atmel_lcdfb.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/video/atmel_lcdfb.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -31,7 +31,7 @@
+ #define ATMEL_LCDC_CVAL_DEFAULT		0xc8
+ #define ATMEL_LCDC_DMA_BURST_LEN	8
+ 
+-#if defined(CONFIG_ARCH_AT91SAM9263) || defined(CONFIG_ARCH_AT91CAP9)
++#if defined(CONFIG_ARCH_AT91SAM9263) || defined(CONFIG_ARCH_AT91CAP9) || defined(CONFIG_ARCH_AT91SAM9RL)
+ #define ATMEL_LCDC_FIFO_SIZE		2048
+ #else
+ #define ATMEL_LCDC_FIFO_SIZE		512
+@@ -316,19 +316,35 @@ static int atmel_lcdfb_check_var(struct 
+ 		break;
+ 	case 15:
+ 	case 16:
+-		var->red.offset = 0;
++		if (sinfo->lcd_wiring_mode == ATMEL_LCDC_WIRING_RGB) {
++			/* RGB:565 mode */
++			var->red.offset = 11;
++			var->blue.offset = 0;
++			var->green.length = 6;
++		} else {
++			/* BGR:555 mode */
++			var->red.offset = 0;
++			var->blue.offset = 10;
++			var->green.length = 5;
++		}
+ 		var->green.offset = 5;
+-		var->blue.offset = 10;
+-		var->red.length = var->green.length = var->blue.length = 5;
++		var->red.length = var->blue.length = 5;
+ 		break;
+ 	case 32:
+ 		var->transp.offset = 24;
+ 		var->transp.length = 8;
+ 		/* fall through */
+ 	case 24:
+-		var->red.offset = 0;
++		if (sinfo->lcd_wiring_mode == ATMEL_LCDC_WIRING_RGB) {
++			/* RGB:888 mode */
++			var->red.offset = 16;
++			var->blue.offset = 0;
++		} else {
++			/* BGR:888 mode */
++			var->red.offset = 0;
++			var->blue.offset = 16;
++		}
+ 		var->green.offset = 8;
+-		var->blue.offset = 16;
+ 		var->red.length = var->green.length = var->blue.length = 8;
+ 		break;
+ 	default:
+@@ -676,6 +692,7 @@ static int __init atmel_lcdfb_probe(stru
+ 		sinfo->atmel_lcdfb_power_control = pdata_sinfo->atmel_lcdfb_power_control;
+ 		sinfo->guard_time = pdata_sinfo->guard_time;
+ 		sinfo->lcdcon_is_backlight = pdata_sinfo->lcdcon_is_backlight;
++		sinfo->lcd_wiring_mode = pdata_sinfo->lcd_wiring_mode;
+ 	} else {
+ 		dev_err(dev, "cannot get default configuration\n");
+ 		goto free_info;
+Index: drivers/mmc/host/at91_mci.c
+===================================================================
+--- linux-2.6.24/drivers/mmc/host/at91_mci.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/mmc/host/at91_mci.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -372,7 +372,7 @@ static void at91_mci_enable(struct at91m
+ 	at91_mci_write(host, AT91_MCI_DTOR, AT91_MCI_DTOMUL_1M | AT91_MCI_DTOCYC);
+ 	mr = AT91_MCI_PDCMODE | 0x34a;
+ 
+-	if (cpu_is_at91sam9260() || cpu_is_at91sam9263())
++	if (cpu_is_at91sam9260() || cpu_is_at91sam9263() || cpu_is_at91sam9rl())
+ 		mr |= AT91_MCI_RDPROOF | AT91_MCI_WRPROOF;
+ 
+ 	at91_mci_write(host, AT91_MCI_MR, mr);
+@@ -840,6 +840,7 @@ static int __init at91_mci_probe(struct 
+ 	mmc->f_min = 375000;
+ 	mmc->f_max = 25000000;
+ 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
++	mmc->caps = MMC_CAP_MULTIWRITE;
+ 
+ 	mmc->max_blk_size = 4095;
+ 	mmc->max_blk_count = mmc->max_req_size;
+@@ -850,7 +851,7 @@ static int __init at91_mci_probe(struct 
+ 	host->bus_mode = 0;
+ 	host->board = pdev->dev.platform_data;
+ 	if (host->board->wire4) {
+-		if (cpu_is_at91sam9260() || cpu_is_at91sam9263())
++		if (cpu_is_at91sam9260() || cpu_is_at91sam9263() || cpu_is_at91sam9rl())
+ 			mmc->caps |= MMC_CAP_4_BIT_DATA;
+ 		else
+ 			dev_warn(&pdev->dev, "4 wire bus mode not supported"
+Index: drivers/rtc/rtc-at91sam9.c
+===================================================================
+--- linux-2.6.24/drivers/rtc/rtc-at91sam9.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/rtc/rtc-at91sam9.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -280,7 +280,7 @@ static irqreturn_t at91_rtc_interrupt(in
+ 	 * SR clears it, so we must only read it in this irq handler!
+ 	 */
+ 	mr = rtt_readl(rtc, MR) & (AT91_RTT_ALMIEN | AT91_RTT_RTTINCIEN);
+-	sr = rtt_readl(rtc, SR) & mr;
++	sr = rtt_readl(rtc, SR) & (mr >> 16);
+ 	if (!sr)
+ 		return IRQ_NONE;
+ 
+@@ -327,6 +327,10 @@ static int __init at91_rtc_probe(struct 
+ 	if (!rtc)
+ 		return -ENOMEM;
+ 
++	/* platform setup code should have handled this; sigh */
++	if (!device_can_wakeup(&pdev->dev))
++		device_init_wakeup(&pdev->dev, 1);
++
+ 	platform_set_drvdata(pdev, rtc);
+ 	rtc->rtt = (void __force __iomem *) (AT91_VA_BASE_SYS - AT91_BASE_SYS);
+ 	rtc->rtt += r->start;
+Index: drivers/usb/gadget/Kconfig
+===================================================================
+--- linux-2.6.24/drivers/usb/gadget/Kconfig	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/usb/gadget/Kconfig	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -117,10 +117,10 @@ config USB_AMD5536UDC
+ config USB_GADGET_ATMEL_USBA
+ 	boolean "Atmel USBA"
+ 	select USB_GADGET_DUALSPEED
+-	depends on AVR32
++	depends on AVR32 || ARCH_AT91
+ 	help
+ 	  USBA is the integrated high-speed USB Device controller on
+-	  the AT32AP700x processors from Atmel.
++	  AT32AP700x & AT91SAM9 processors from Atmel.
+ 
+ config USB_ATMEL_USBA
+ 	tristate
+Index: drivers/usb/gadget/atmel_usba_udc.c
+===================================================================
+--- linux-2.6.24/drivers/usb/gadget/atmel_usba_udc.c	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/usb/gadget/atmel_usba_udc.c	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -18,6 +18,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/usb/ch9.h>
+ #include <linux/usb/gadget.h>
++#include <linux/usb/atmel_usba_udc.h>
+ #include <linux/delay.h>
+ 
+ #include <asm/gpio.h>
+@@ -27,6 +28,7 @@
+ 
+ 
+ static struct usba_udc the_udc;
++static struct usba_ep *usba_ep;
+ 
+ #ifdef CONFIG_USB_GADGET_DEBUG_FS
+ #include <linux/debugfs.h>
+@@ -324,53 +326,28 @@ static int vbus_is_present(struct usba_u
+ 	return 1;
+ }
+ 
+-static void copy_to_fifo(void __iomem *fifo, const void *buf, int len)
+-{
+-	unsigned long tmp;
++#if defined(CONFIG_AVR32)
+ 
+-	DBG(DBG_FIFO, "copy to FIFO (len %d):\n", len);
+-	for (; len > 0; len -= 4, buf += 4, fifo += 4) {
+-		tmp = *(unsigned long *)buf;
+-		if (len >= 4) {
+-			DBG(DBG_FIFO, "  -> %08lx\n", tmp);
+-			__raw_writel(tmp, fifo);
+-		} else {
+-			do {
+-				DBG(DBG_FIFO, "  -> %02lx\n", tmp >> 24);
+-				__raw_writeb(tmp >> 24, fifo);
+-				fifo++;
+-				tmp <<= 8;
+-			} while (--len);
+-			break;
+-		}
+-	}
++static void toggle_bias(int is_on)
++{
+ }
+ 
+-static void copy_from_fifo(void *buf, void __iomem *fifo, int len)
++#elif defined(CONFIG_ARCH_AT91)
++
++#include <asm/arch/at91_pmc.h>
++
++static void toggle_bias(int is_on)
+ {
+-	union {
+-		unsigned long *w;
+-		unsigned char *b;
+-	} p;
+-	unsigned long tmp;
+-
+-	DBG(DBG_FIFO, "copy from FIFO (len %d):\n", len);
+-	for (p.w = buf; len > 0; len -= 4, p.w++, fifo += 4) {
+-		if (len >= 4) {
+-			tmp = __raw_readl(fifo);
+-			*p.w = tmp;
+-			DBG(DBG_FIFO, "  -> %08lx\n", tmp);
+-		} else {
+-			do {
+-				tmp = __raw_readb(fifo);
+-				*p.b = tmp;
+-				DBG(DBG_FIFO, " -> %02lx\n", tmp);
+-				fifo++, p.b++;
+-			} while (--len);
+-		}
+-	}
++	unsigned int uckr = at91_sys_read(AT91_CKGR_UCKR);
++
++	if (is_on)
++		at91_sys_write(AT91_CKGR_UCKR, uckr | AT91_PMC_BIASEN);
++	else
++		at91_sys_write(AT91_CKGR_UCKR, uckr & ~(AT91_PMC_BIASEN));
+ }
+ 
++#endif /* CONFIG_ARCH_AT91 */
++
+ static void next_fifo_transaction(struct usba_ep *ep, struct usba_request *req)
+ {
+ 	unsigned int transaction_len;
+@@ -387,7 +364,7 @@ static void next_fifo_transaction(struct
+ 		ep->ep.name, req, transaction_len,
+ 		req->last_transaction ? ", done" : "");
+ 
+-	copy_to_fifo(ep->fifo, req->req.buf + req->req.actual, transaction_len);
++	memcpy_toio(ep->fifo, req->req.buf + req->req.actual, transaction_len);
+ 	usba_ep_writel(ep, SET_STA, USBA_TX_PK_RDY);
+ 	req->req.actual += transaction_len;
+ }
+@@ -476,7 +453,7 @@ static void receive_data(struct usba_ep 
+ 			bytecount = req->req.length - req->req.actual;
+ 		}
+ 
+-		copy_from_fifo(req->req.buf + req->req.actual,
++		memcpy_fromio(req->req.buf + req->req.actual,
+ 				ep->fifo, bytecount);
+ 		req->req.actual += bytecount;
+ 
+@@ -1029,33 +1006,6 @@ static const struct usb_gadget_ops usba_
+ 	.set_selfpowered	= usba_udc_set_selfpowered,
+ };
+ 
+-#define EP(nam, idx, maxpkt, maxbk, dma, isoc)			\
+-{								\
+-	.ep	= {						\
+-		.ops		= &usba_ep_ops,			\
+-		.name		= nam,				\
+-		.maxpacket	= maxpkt,			\
+-	},							\
+-	.udc		= &the_udc,				\
+-	.queue		= LIST_HEAD_INIT(usba_ep[idx].queue),	\
+-	.fifo_size	= maxpkt,				\
+-	.nr_banks	= maxbk,				\
+-	.index		= idx,					\
+-	.can_dma	= dma,					\
+-	.can_isoc	= isoc,					\
+-}
+-
+-static struct usba_ep usba_ep[] = {
+-	EP("ep0", 0, 64, 1, 0, 0),
+-	EP("ep1in-bulk", 1, 512, 2, 1, 1),
+-	EP("ep2out-bulk", 2, 512, 2, 1, 1),
+-	EP("ep3in-int", 3, 64, 3, 1, 0),
+-	EP("ep4out-int", 4, 64, 3, 1, 0),
+-	EP("ep5in-iso", 5, 1024, 3, 1, 1),
+-	EP("ep6out-iso", 6, 1024, 3, 1, 1),
+-};
+-#undef EP
+-
+ static struct usb_endpoint_descriptor usba_ep0_desc = {
+ 	.bLength = USB_DT_ENDPOINT_SIZE,
+ 	.bDescriptorType = USB_DT_ENDPOINT,
+@@ -1074,7 +1024,6 @@ static void nop_release(struct device *d
+ static struct usba_udc the_udc = {
+ 	.gadget	= {
+ 		.ops		= &usba_udc_ops,
+-		.ep0		= &usba_ep[0].ep,
+ 		.ep_list	= LIST_HEAD_INIT(the_udc.gadget.ep_list),
+ 		.is_dualspeed	= 1,
+ 		.name		= "atmel_usba_udc",
+@@ -1231,7 +1180,7 @@ static int do_test_mode(struct usba_udc 
+ 		} else {
+ 			usba_ep_writel(ep, CTL_ENB, USBA_EPT_ENABLE);
+ 			usba_writel(udc, TST, USBA_TST_PKT_MODE);
+-			copy_to_fifo(ep->fifo, test_packet_buffer,
++			memcpy_toio(ep->fifo, test_packet_buffer,
+ 					sizeof(test_packet_buffer));
+ 			usba_ep_writel(ep, SET_STA, USBA_TX_PK_RDY);
+ 			dev_info(dev, "Entering Test_Packet mode...\n");
+@@ -1384,8 +1333,7 @@ delegate:
+ 	return retval;
+ 
+ stall:
+-	printk(KERN_ERR
+-		"udc: %s: Invalid setup request: %02x.%02x v%04x i%04x l%d, "
++	pr_err("udc: %s: Invalid setup request: %02x.%02x v%04x i%04x l%d, "
+ 		"halting endpoint...\n",
+ 		ep->ep.name, crq->bRequestType, crq->bRequest,
+ 		le16_to_cpu(crq->wValue), le16_to_cpu(crq->wIndex),
+@@ -1456,8 +1404,7 @@ restart:
+ 				set_protocol_stall(udc, ep);
+ 			break;
+ 		default:
+-			printk(KERN_ERR
+-				"udc: %s: TXCOMP: Invalid endpoint state %d, "
++			pr_err("udc: %s: TXCOMP: Invalid endpoint state %d, "
+ 				"halting endpoint...\n",
+ 				ep->ep.name, ep->state);
+ 			set_protocol_stall(udc, ep);
+@@ -1486,8 +1433,7 @@ restart:
+ 		default:
+ 			usba_ep_writel(ep, CLR_STA, USBA_RX_BK_RDY);
+ 			usba_ep_writel(ep, CTL_DIS, USBA_RX_BK_RDY);
+-			printk(KERN_ERR
+-				"udc: %s: RXRDY: Invalid endpoint state %d, "
++			pr_err("udc: %s: RXRDY: Invalid endpoint state %d, "
+ 				"halting endpoint...\n",
+ 				ep->ep.name, ep->state);
+ 			set_protocol_stall(udc, ep);
+@@ -1532,14 +1478,14 @@ restart:
+ 		pkt_len = USBA_BFEXT(BYTE_COUNT, usba_ep_readl(ep, STA));
+ 		DBG(DBG_HW, "Packet length: %u\n", pkt_len);
+ 		if (pkt_len != sizeof(crq)) {
+-			printk(KERN_WARNING "udc: Invalid packet length %u "
+-				"(expected %lu)\n", pkt_len, sizeof(crq));
++			pr_warning("udc: Invalid packet length %u "
++				"(expected %zu)\n", pkt_len, sizeof(crq));
+ 			set_protocol_stall(udc, ep);
+ 			return;
+ 		}
+ 
+ 		DBG(DBG_FIFO, "Copying ctrl request from 0x%p:\n", ep->fifo);
+-		copy_from_fifo(crq.data, ep->fifo, sizeof(crq));
++		memcpy_fromio(crq.data, ep->fifo, sizeof(crq));
+ 
+ 		/* Free up one bank in the FIFO so that we can
+ 		 * generate or receive a reply right away. */
+@@ -1691,6 +1637,7 @@ static irqreturn_t usba_udc_irq(int irq,
+ 	DBG(DBG_INT, "irq, status=%#08x\n", status);
+ 
+ 	if (status & USBA_DET_SUSPEND) {
++		toggle_bias(0);
+ 		usba_writel(udc, INT_CLR, USBA_DET_SUSPEND);
+ 		DBG(DBG_BUS, "Suspend detected\n");
+ 		if (udc->gadget.speed != USB_SPEED_UNKNOWN
+@@ -1702,6 +1649,7 @@ static irqreturn_t usba_udc_irq(int irq,
+ 	}
+ 
+ 	if (status & USBA_WAKE_UP) {
++		toggle_bias(1);
+ 		usba_writel(udc, INT_CLR, USBA_WAKE_UP);
+ 		DBG(DBG_BUS, "Wake Up CPU detected\n");
+ 	}
+@@ -1795,12 +1743,14 @@ static irqreturn_t usba_vbus_irq(int irq
+ 	vbus = gpio_get_value(udc->vbus_pin);
+ 	if (vbus != udc->vbus_prev) {
+ 		if (vbus) {
+-			usba_writel(udc, CTRL, USBA_EN_USBA);
++			toggle_bias(1);
++			usba_writel(udc, CTRL, USBA_ENABLE_MASK);
+ 			usba_writel(udc, INT_ENB, USBA_END_OF_RESET);
+ 		} else {
+ 			udc->gadget.speed = USB_SPEED_UNKNOWN;
+ 			reset_all_endpoints(udc);
+-			usba_writel(udc, CTRL, 0);
++			toggle_bias(0);
++			usba_writel(udc, CTRL, USBA_DISABLE_MASK);
+ 			spin_unlock(&udc->lock);
+ 			udc->driver->disconnect(&udc->gadget);
+ 			spin_lock(&udc->lock);
+@@ -1853,7 +1803,8 @@ int usb_gadget_register_driver(struct us
+ 	/* If Vbus is present, enable the controller and wait for reset */
+ 	spin_lock_irqsave(&udc->lock, flags);
+ 	if (vbus_is_present(udc) && udc->vbus_prev == 0) {
+-		usba_writel(udc, CTRL, USBA_EN_USBA);
++		toggle_bias(1);
++		usba_writel(udc, CTRL, USBA_ENABLE_MASK);
+ 		usba_writel(udc, INT_ENB, USBA_END_OF_RESET);
+ 	}
+ 	spin_unlock_irqrestore(&udc->lock, flags);
+@@ -1886,7 +1837,8 @@ int usb_gadget_unregister_driver(struct 
+ 	spin_unlock_irqrestore(&udc->lock, flags);
+ 
+ 	/* This will also disable the DP pullup */
+-	usba_writel(udc, CTRL, 0);
++	toggle_bias(0);
++	usba_writel(udc, CTRL, USBA_DISABLE_MASK);
+ 
+ 	driver->unbind(&udc->gadget);
+ 	udc->gadget.dev.driver = NULL;
+@@ -1911,7 +1863,7 @@ static int __init usba_udc_probe(struct 
+ 
+ 	regs = platform_get_resource(pdev, IORESOURCE_MEM, CTRL_IOMEM_ID);
+ 	fifo = platform_get_resource(pdev, IORESOURCE_MEM, FIFO_IOMEM_ID);
+-	if (!regs || !fifo)
++	if (!regs || !fifo || !pdata)
+ 		return -ENXIO;
+ 
+ 	irq = platform_get_irq(pdev, 0);
+@@ -1956,19 +1908,48 @@ static int __init usba_udc_probe(struct 
+ 
+ 	/* Make sure we start from a clean slate */
+ 	clk_enable(pclk);
+-	usba_writel(udc, CTRL, 0);
++	toggle_bias(0);
++	usba_writel(udc, CTRL, USBA_DISABLE_MASK);
+ 	clk_disable(pclk);
+ 
++	usba_ep = kmalloc(sizeof(struct usba_ep) * pdata->num_ep,
++			  GFP_KERNEL);
++	if (!usba_ep)
++		goto err_alloc_ep;
++
++	the_udc.gadget.ep0 = &usba_ep[0].ep;
++
+ 	INIT_LIST_HEAD(&usba_ep[0].ep.ep_list);
+ 	usba_ep[0].ep_regs = udc->regs + USBA_EPT_BASE(0);
+ 	usba_ep[0].dma_regs = udc->regs + USBA_DMA_BASE(0);
+ 	usba_ep[0].fifo = udc->fifo + USBA_FIFO_BASE(0);
+-	for (i = 1; i < ARRAY_SIZE(usba_ep); i++) {
++	usba_ep[0].ep.ops = &usba_ep_ops;
++	usba_ep[0].ep.name = pdata->ep[0].name;
++	usba_ep[0].ep.maxpacket = pdata->ep[0].fifo_size;
++	usba_ep[0].udc = &the_udc;
++	INIT_LIST_HEAD(&usba_ep[0].queue);
++	usba_ep[0].fifo_size = pdata->ep[0].fifo_size;
++	usba_ep[0].nr_banks = pdata->ep[0].nr_banks;
++	usba_ep[0].index = pdata->ep[0].index;
++	usba_ep[0].can_dma = pdata->ep[0].can_dma;
++	usba_ep[0].can_isoc = pdata->ep[0].can_isoc;
++
++	for (i = 1; i < pdata->num_ep; i++) {
+ 		struct usba_ep *ep = &usba_ep[i];
+ 
+ 		ep->ep_regs = udc->regs + USBA_EPT_BASE(i);
+ 		ep->dma_regs = udc->regs + USBA_DMA_BASE(i);
+ 		ep->fifo = udc->fifo + USBA_FIFO_BASE(i);
++		ep->ep.ops = &usba_ep_ops;
++		ep->ep.name = pdata->ep[i].name;
++		ep->ep.maxpacket = pdata->ep[i].fifo_size;
++		ep->udc = &the_udc;
++		INIT_LIST_HEAD(&ep->queue);
++		ep->fifo_size = pdata->ep[i].fifo_size;
++		ep->nr_banks = pdata->ep[i].nr_banks;
++		ep->index = pdata->ep[i].index;
++		ep->can_dma = pdata->ep[i].can_dma;
++		ep->can_isoc = pdata->ep[i].can_isoc;
+ 
+ 		list_add_tail(&ep->ep.ep_list, &udc->gadget.ep_list);
+ 	}
+@@ -1987,7 +1968,7 @@ static int __init usba_udc_probe(struct 
+ 		goto err_device_add;
+ 	}
+ 
+-	if (pdata && pdata->vbus_pin != GPIO_PIN_NONE) {
++	if (pdata->vbus_pin >= 0) {
+ 		if (!gpio_request(pdata->vbus_pin, "atmel_usba_udc")) {
+ 			udc->vbus_pin = pdata->vbus_pin;
+ 
+@@ -2007,7 +1988,7 @@ static int __init usba_udc_probe(struct 
+ 	}
+ 
+ 	usba_init_debugfs(udc);
+-	for (i = 1; i < ARRAY_SIZE(usba_ep); i++)
++	for (i = 1; i < pdata->num_ep; i++)
+ 		usba_ep_init_debugfs(udc, &usba_ep[i]);
+ 
+ 	return 0;
+@@ -2015,6 +1996,8 @@ static int __init usba_udc_probe(struct 
+ err_device_add:
+ 	free_irq(irq, udc);
+ err_request_irq:
++	kfree(usba_ep);
++err_alloc_ep:
+ 	iounmap(udc->fifo);
+ err_map_fifo:
+ 	iounmap(udc->regs);
+@@ -2032,10 +2015,11 @@ static int __exit usba_udc_remove(struct
+ {
+ 	struct usba_udc *udc;
+ 	int i;
++	struct usba_platform_data *pdata = pdev->dev.platform_data;
+ 
+ 	udc = platform_get_drvdata(pdev);
+ 
+-	for (i = 1; i < ARRAY_SIZE(usba_ep); i++)
++	for (i = 1; i < pdata->num_ep; i++)
+ 		usba_ep_cleanup_debugfs(&usba_ep[i]);
+ 	usba_cleanup_debugfs(udc);
+ 
+@@ -2043,6 +2027,7 @@ static int __exit usba_udc_remove(struct
+ 		gpio_free(udc->vbus_pin);
+ 
+ 	free_irq(udc->irq, udc);
++	kfree(usba_ep);
+ 	iounmap(udc->fifo);
+ 	iounmap(udc->regs);
+ 	clk_put(udc->hclk);
+Index: drivers/usb/gadget/atmel_usba_udc.h
+===================================================================
+--- linux-2.6.24/drivers/usb/gadget/atmel_usba_udc.h	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/usb/gadget/atmel_usba_udc.h	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -41,6 +41,15 @@
+ #define USBA_EN_USBA				(1 <<  8)
+ #define USBA_DETACH				(1 <<  9)
+ #define USBA_REMOTE_WAKE_UP			(1 << 10)
++#define USBA_PULLD_DIS				(1 << 11)
++
++#if defined(CONFIG_AVR32)
++#define USBA_ENABLE_MASK			USBA_EN_USBA
++#define USBA_DISABLE_MASK			0
++#elif defined(CONFIG_ARCH_AT91)
++#define USBA_ENABLE_MASK			(USBA_EN_USBA | USBA_PULLD_DIS)
++#define USBA_DISABLE_MASK			USBA_DETACH
++#endif /* CONFIG_ARCH_AT91 */
+ 
+ /* Bitfields in FNUM */
+ #define USBA_MICRO_FRAME_NUM_OFFSET		0
+@@ -216,7 +225,6 @@
+ #define FIFO_IOMEM_ID	0
+ #define CTRL_IOMEM_ID	1
+ 
+-#ifdef DEBUG
+ #define DBG_ERR		0x0001	/* report all error returns */
+ #define DBG_HW		0x0002	/* debug hardware initialization */
+ #define DBG_GADGET	0x0004	/* calls to/from gadget driver */
+@@ -230,14 +238,12 @@
+ #define DBG_NONE	0x0000
+ 
+ #define DEBUG_LEVEL	(DBG_ERR)
++
+ #define DBG(level, fmt, ...)					\
+ 	do {							\
+ 		if ((level) & DEBUG_LEVEL)			\
+-			printk(KERN_DEBUG "udc: " fmt, ## __VA_ARGS__);	\
++			pr_debug("udc: " fmt, ## __VA_ARGS__);	\
+ 	} while (0)
+-#else
+-#define DBG(level, fmt...)
+-#endif
+ 
+ enum usba_ctrl_state {
+ 	WAIT_FOR_SETUP,
+Index: drivers/base/power/Makefile
+===================================================================
+--- linux-2.6.24/drivers/base/power/Makefile	(.../linux-2.6.24-at91)	(revision 5574)
++++ linux-2.6.24/drivers/base/power/Makefile	(.../linux-2.6.24-linux4sam_1.2_20080408)	(revision 5574)
+@@ -1,7 +1,7 @@
+ obj-y			:= shutdown.o
+ obj-$(CONFIG_PM)	+= sysfs.o
+ obj-$(CONFIG_PM_SLEEP)	+= main.o
+-obj-$(CONFIG_PM_TRACE)	+= trace.o
++obj-$(CONFIG_PM_TRACE_RTC)	+= trace.o
+ 
+ ifeq ($(CONFIG_DEBUG_DRIVER),y)
+ EXTRA_CFLAGS += -DDEBUG
